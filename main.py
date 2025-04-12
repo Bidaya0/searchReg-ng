@@ -30,12 +30,12 @@ def main():
     result = search_system.process_topic(topic)
     
     # 输出结果
-    if result["status"] == "success":
+    if result["status"] == "completed":
         print("\n=== 对话历史结果 ===")
-        # print(result["chat_history"])
+        print(result)
 
     else:
-        print(f"处理过程中出现错误：{result['error']}")
+        print(f"处理过程中出现错误：{result}")
 
 if __name__ == "__main__":
     main() 

@@ -35,7 +35,7 @@ class SearchAgentSystem:
             system_message="""你是一个主题分析专家，负责分析用户输入的主题，提取关键词和生成搜索建议。
             你不需要对前文做出总结和附和，只需要关注你手中的任务即可， 避免重复你的上一个人的话语，从而基于上下文不断提出新观点。
             你需要：
-            1. 分析主题的核心概念
+            1. 分析主题的核心概念，并进行扩展性陈述。
             2. 评估主题的搜索结果，当还没有进行过搜索时，不需要执行。
             3. 当前文中有搜索的结果之后，根据搜索结果及总结的内容，生成的主题并深入讨论。
             4. 给其他人提供搜索建议，强调你还需要的资料内容。
@@ -85,6 +85,7 @@ class SearchAgentSystem:
         self.content_recorder = AssistantAgent(
             name="content_recorder",
             system_message="""你是一个内容记录专家，负责记录和总结搜索结果。
+            搜索结果可能会有多语言场景，请尝试搜索到的结果用中文进行总结。
             你需要：
             1. 对搜索结果进行分类和标记
             2. 生成结构化摘要
@@ -101,6 +102,13 @@ class SearchAgentSystem:
             human_input_mode="NEVER",
             max_consecutive_auto_reply=10,
         )
+        
+        # 添加结果收集相关属性
+        self.current_search_results = []
+        self.current_summaries = []
+        self.current_key_points = []
+        self.termination_reason = None
+        self.dialogue_status = "running"  # 改为running表示进行中
         
         # 注册搜索函数
         @self.user_proxy.register_for_execution()
@@ -219,12 +227,21 @@ class SearchAgentSystem:
             
         # 检查对话质量
         if not self._evaluate_dialogue_quality(recent_messages):
-            print("对话质量不佳，结束对话",)
-            return None  # 如果质量不佳，结束对话
+            self.termination_reason = "quality_threshold"
+            self.dialogue_status = "completed"  # 改为completed表示正常完成
+            print("对话质量达到阈值，结束对话")
+            return None
         
+        # 检查是否达到最大轮次
+        if len(groupchat.messages) >= 20:
+            self.termination_reason = "max_rounds"
+            self.dialogue_status = "completed"
+            return None
+            
         # 默认的第二个接话的是topic_analyzer
         if len(groupchat.messages) < 2:
             return self.topic_analyzer
+            
         if last_speaker is self.topic_analyzer:
             # 检查是否需要继续搜索
             if self._should_continue_search(recent_messages):
@@ -236,12 +253,17 @@ class SearchAgentSystem:
             if self._has_tool_call_request(recent_messages):
                 return self.user_proxy
             else:
+                # 记录搜索完成
+                self.termination_reason = "search_completed"
+                self.dialogue_status = "completed"
                 return None
         elif last_speaker is self.content_recorder:
             # 检查是否需要继续对话
             if self._should_continue_dialogue(recent_messages):
                 return self.topic_analyzer
             else:
+                self.termination_reason = "normal_completion"
+                self.dialogue_status = "completed"
                 return None
         else:
             return self.topic_analyzer
@@ -249,8 +271,7 @@ class SearchAgentSystem:
     def _should_continue_search(self, messages: List[Dict]) -> bool:
         """评估是否需要继续搜索"""
         # 检查是否有足够的搜索结果
-        search_results = [msg for msg in messages if msg.get("role") == "assistant" and "search_results" in msg.get("content", "")]
-        if len(search_results) >= 3:  # 如果已经有3次搜索结果，可能不需要继续
+        if len(self.current_search_results) >= 3:  # 如果已经有3次搜索结果，可能不需要继续
             return False
             
         # 检查是否有明确的停止信号
@@ -306,6 +327,13 @@ class SearchAgentSystem:
     def process_topic(self, topic: str) -> Dict:
         """处理完整的工作流程"""
         try:
+            # 重置状态
+            self.current_search_results = []
+            self.current_summaries = []
+            self.current_key_points = []
+            self.termination_reason = None
+            self.dialogue_status = "running"
+            
             # 开始群组对话
             chat_result = self.user_proxy.initiate_chat(
                 self.manager,
@@ -313,28 +341,35 @@ class SearchAgentSystem:
                 请分析这个主题，执行搜索，并总结结果。"""
             )
             
-            # 保存对话历史
+            # 构建最终结果
+            final_result = {
+                "status": self.dialogue_status,
+                "termination_reason": self.termination_reason,
+                "search_results": self.current_search_results,
+                "summaries": self.current_summaries,
+                "key_points": self.current_key_points,
+                "chat_history": chat_result.chat_history,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # 保存结果
             self._save_to_file(
-                chat_result.chat_history,
-                "logs",
-                f"chat_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                final_result,
+                "results",
+                f"final_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             )
             
-            return {
-                "status": "success",
-                "chat_history": chat_result.chat_history
-            }
+            return final_result
             
         except Exception as e:
             # 错误处理
             error_log = {
                 "error": str(e),
                 "topic": topic,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "status": "error",  # 只有真正的错误才使用error状态
+                "termination_reason": "system_error"
             }
             self._save_to_file(error_log, "logs", f"error_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
             
-            return {
-                "status": "error",
-                "error": str(e)
-            } 
+            return error_log 
