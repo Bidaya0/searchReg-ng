@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 import requests
 from langchain_community.utilities import SearxSearchWrapper
+import yaml
 
 class SearchAgentSystem:
     def __init__(self, config: Dict[str, Any]):
@@ -29,11 +30,12 @@ class SearchAgentSystem:
         self.topic_analyzer = AssistantAgent(
             name="topic_analyzer",
             system_message="""你是一个主题分析专家，负责分析用户输入的主题，提取关键词和生成搜索建议。
+            你不需要对前文做出总结和附和，只需要关注你手中的任务即可， 避免重复你的上一个人的话语，从而基于上下文不断提出新观点。
             你需要：
             1. 分析主题的核心概念
-            2. 提取3-5个核心关键词
-            3. 生成2-3个相关子主题
-            4. 评估主题的搜索难度
+            2. 评估主题的搜索结果，当还没有进行过搜索时，不需要执行。
+            3. 当前文中有搜索的结果之后，根据搜索结果及总结的内容，生成的主题并深入讨论。
+            4. 给其他人提供搜索建议，强调你还需要的资料内容。
             """,
             llm_config=self.llm_config
         )
@@ -41,11 +43,30 @@ class SearchAgentSystem:
         # 创建搜索执行器
         self.search_executor = AssistantAgent(
             name="search_executor",
-            system_message="""你是一个搜索执行专家，负责执行搜索请求并管理搜索结果。
-            你可以使用 get_search_page 函数来执行搜索。如果你发现当前场景不适合调用工具，请进行详细说明原因。
-            你需要：
-            1. 根据分析结果构建合适的搜索查询
-            2. 执行搜索并获取结果
+            system_message="""你是一个搜索执行专家，负责执行搜索请求并管理搜索结果, 你不需要对前文做出总结和附和，只需要创造性的向下进行新的搜索即可。
+            
+            你必须：
+            1. 在每次对话中至少执行一次搜索工具调用
+            2. 如果无法执行搜索，必须明确说明原因
+            3. 根据搜索结果生成新的搜索查询
+            4. 评估搜索结果的相关性
+            
+            你可以使用 get_search_page 函数来执行搜索。每次对话必须尝试执行搜索，除非：
+            - 已经获取到足够的相关结果
+            - 遇到明确的错误提示
+            - 需要等待其他代理的输入
+            
+            如果搜索失败，你需要：
+            1. 明确说明失败原因
+            2. 建议可能的解决方案
+            3. 请求其他代理的帮助
+            
+            搜索执行流程：
+            1. 接收主题分析结果
+            2. 构建搜索查询
+            3. 执行搜索
+            4. 评估结果
+            5. 决定是否需要继续搜索
             """,
             llm_config=self.llm_config
         )
@@ -101,7 +122,7 @@ class SearchAgentSystem:
                     f"search_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 )
                 
-                return json.dumps(search_result, ensure_ascii=False, indent=2)
+                return yaml.dump(search_result, allow_unicode=True)
             except Exception as e:
                 raise Exception(f"搜索执行失败: {str(e)}")
         
@@ -136,17 +157,113 @@ class SearchAgentSystem:
             json.dump(data, f, ensure_ascii=False, indent=2)
     
     def _state_transition(self, last_speaker, groupchat):
-        """定义对话状态转换"""
+        """改进的对话状态转换逻辑"""
+        # 获取最近的对话消息
+        recent_messages = groupchat.messages[-5:] if len(groupchat.messages) > 5 else groupchat.messages
         if last_speaker is self.topic_analyzer:
-            return self.search_executor
+            # 检查是否需要继续搜索
+            if self._should_continue_search(recent_messages):
+                return self.search_executor
+            else:
+                return self.content_recorder
         elif last_speaker is self.search_executor:
-            return self.user_proxy
+            # 检查是否有工具调用请求
+            if self._has_tool_call_request(recent_messages):
+                return self.user_proxy
+            # 检查搜索是否成功
+            else:
+                return None
+        elif len(groupchat.messages) < 2:
+            return self.topic_analyzer
         elif last_speaker is self.user_proxy:
             return self.content_recorder
         elif last_speaker is self.content_recorder:
-            return self.topic_analyzer
+            # 检查是否需要继续对话
+            if self._should_continue_dialogue(recent_messages):
+                return self.topic_analyzer
+            else:
+                return None
         else:
             return self.topic_analyzer
+
+    def _should_continue_search(self, messages: List[Dict]) -> bool:
+        """评估是否需要继续搜索"""
+        # 检查是否有足够的搜索结果
+        search_results = [msg for msg in messages if msg.get("role") == "assistant" and "search_results" in msg.get("content", "")]
+        if len(search_results) >= 3:  # 如果已经有3次搜索结果，可能不需要继续
+            return False
+            
+        # 检查是否有明确的停止信号
+        last_message = messages[-1] if messages else {}
+        if "停止搜索" in last_message.get("content", ""):
+            return False
+            
+        return True
+
+    def _has_tool_call_request(self, messages: List[Dict]) -> bool:
+        """检查是否有工具调用请求"""
+        last_message = messages[-1] if messages else {}
+        tool_calls = last_message.get("tool_calls", "")
+        
+        # 检查是否包含工具调用请求
+        if tool_calls:
+            return True
+            
+        return False
+
+    def _was_search_successful(self, messages: List[Dict]) -> bool:
+        """评估搜索是否成功"""
+        last_message = messages[-1] if messages else {}
+        content = last_message.get("content", "")
+        
+        # 检查是否有搜索结果
+        if "search_results" in content:
+            return True
+            
+        # 检查是否有错误信息
+        if "搜索失败" in content or "错误" in content:
+            return False
+            
+        return False
+
+    def _should_continue_dialogue(self, messages: List[Dict]) -> bool:
+        """评估是否需要继续对话"""
+        # 检查对话轮次
+        if len(messages) >= 20:  # 最大对话轮次
+            return False
+            
+        # 检查是否有明确的结束信号
+        last_message = messages[-1] if messages else {}
+        if "结束对话" in last_message.get("content", ""):
+            return False
+            
+        # 检查对话质量
+        print("对话质量:",self._evaluate_dialogue_quality(messages))
+        if not self._evaluate_dialogue_quality(messages):
+            return False
+            
+        return True
+
+    def _evaluate_dialogue_quality(self, messages: List[Dict]) -> bool:
+        """评估对话质量"""
+        return True # 暂时关闭对话质量评估 目前优先解决当前问题
+
+        # 计算工具调用次数
+        tool_calls = sum(1 for msg in messages if "get_search_page" in msg.get("content", ""))
+        
+        # 检查重复内容
+        unique_contents = set()
+        for msg in messages:
+            content = msg.get("content", "")
+            if content in unique_contents:
+                return False
+            unique_contents.add(content)
+            
+        # 检查对话进展
+        if tool_calls == 0:
+            return False
+            
+        return True
     
     def process_topic(self, topic: str) -> Dict:
         """处理完整的工作流程"""

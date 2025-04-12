@@ -31,14 +31,9 @@ def main():
     
     # 输出结果
     if result["status"] == "success":
-        print("\n=== 主题分析结果 ===")
-        print(result["analysis"])
-        
-        print("\n=== 搜索结果 ===")
-        print(result["search"])
-        
-        print("\n=== 最终总结 ===")
-        print(result["summary"])
+        print("\n=== 对话历史结果 ===")
+        print(result["chat_history"])
+
     else:
         print(f"处理过程中出现错误：{result['error']}")
 
