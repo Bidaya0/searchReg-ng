@@ -32,7 +32,7 @@ def main():
     # 输出结果
     if result["status"] == "success":
         print("\n=== 对话历史结果 ===")
-        print(result["chat_history"])
+        # print(result["chat_history"])
 
     else:
         print(f"处理过程中出现错误：{result['error']}")

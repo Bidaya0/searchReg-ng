@@ -7,6 +7,9 @@ from datetime import datetime
 import requests
 from langchain_community.utilities import SearxSearchWrapper
 import yaml
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 class SearchAgentSystem:
     def __init__(self, config: Dict[str, Any]):
@@ -43,7 +46,9 @@ class SearchAgentSystem:
         # 创建搜索执行器
         self.search_executor = AssistantAgent(
             name="search_executor",
-            system_message="""你是一个搜索执行专家，负责执行搜索请求并管理搜索结果, 你不需要对前文做出总结和附和，只需要创造性的向下进行新的搜索即可。
+            system_message="""你是一个搜索执行专家，负责执行搜索请求并管理搜索结果。
+            你不需要对前文做出总结和附和，只需要创造性的向下进行新的搜索即可。
+            你也不需要给出搜索建议，只需要想办法尽可能地调用工具执行搜索。
             
             你必须：
             1. 在每次对话中至少执行一次搜索工具调用
@@ -71,6 +76,11 @@ class SearchAgentSystem:
             llm_config=self.llm_config
         )
         
+        # 添加消息历史记录
+        self.message_history = []
+        self.similarity_threshold = 0.8  # 相似度阈值
+        self.max_repeats = 2  # 最大重复次数
+        
         # 创建内容记录器
         self.content_recorder = AssistantAgent(
             name="content_recorder",
@@ -80,6 +90,7 @@ class SearchAgentSystem:
             2. 生成结构化摘要
             3. 评估内容完整性
             4. 提取关键点
+            5. 避免重复之前已经讨论过的内容
             """,
             llm_config=self.llm_config
         )
@@ -156,10 +167,64 @@ class SearchAgentSystem:
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     
+    def _calculate_message_similarity(self, message1: str, message2: str) -> float:
+        """计算两条消息的相似度"""
+        vectorizer = TfidfVectorizer()
+        try:
+            tfidf_matrix = vectorizer.fit_transform([message1, message2])
+            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+            return similarity
+        except:
+            return 0.0
+
+    def _check_message_repetition(self, new_message: str) -> bool:
+        """检查新消息是否与历史消息重复"""
+        if not self.message_history:
+            return False
+            
+        # 计算与最近5条消息的相似度
+        recent_messages = self.message_history[-5:]
+        similarities = [self._calculate_message_similarity(new_message, msg) for msg in recent_messages]
+        
+        # 如果与任何一条消息的相似度超过阈值，则认为重复
+        return any(sim > self.similarity_threshold for sim in similarities)
+
+    def _evaluate_dialogue_quality(self, messages: List[Dict]) -> bool:
+        """评估对话质量"""
+        if not messages:
+            return True
+            
+        # 获取最近的5条消息
+        recent_messages = messages[-5:]
+        contents = [msg.get("content", "") for msg in recent_messages if msg.get("content")]
+        
+        # 检查重复
+        for i in range(len(contents)):
+            for j in range(i+1, len(contents)):
+                similarity = self._calculate_message_similarity(contents[i], contents[j])
+                print("相似度",similarity)
+                if similarity > self.similarity_threshold:
+                    return False
+                    
+        return True
+
     def _state_transition(self, last_speaker, groupchat):
         """改进的对话状态转换逻辑"""
         # 获取最近的对话消息
         recent_messages = groupchat.messages[-5:] if len(groupchat.messages) > 5 else groupchat.messages
+        
+        # 更新消息历史
+        if recent_messages:
+            self.message_history.append(recent_messages[-1].get("content", ""))
+            
+        # 检查对话质量
+        if not self._evaluate_dialogue_quality(recent_messages):
+            print("对话质量不佳，结束对话",)
+            return None  # 如果质量不佳，结束对话
+        
+        # 默认的第二个接话的是topic_analyzer
+        if len(groupchat.messages) < 2:
+            return self.topic_analyzer
         if last_speaker is self.topic_analyzer:
             # 检查是否需要继续搜索
             if self._should_continue_search(recent_messages):
@@ -170,13 +235,8 @@ class SearchAgentSystem:
             # 检查是否有工具调用请求
             if self._has_tool_call_request(recent_messages):
                 return self.user_proxy
-            # 检查搜索是否成功
             else:
                 return None
-        elif len(groupchat.messages) < 2:
-            return self.topic_analyzer
-        elif last_speaker is self.user_proxy:
-            return self.content_recorder
         elif last_speaker is self.content_recorder:
             # 检查是否需要继续对话
             if self._should_continue_dialogue(recent_messages):
@@ -238,33 +298,11 @@ class SearchAgentSystem:
             return False
             
         # 检查对话质量
-        print("对话质量:",self._evaluate_dialogue_quality(messages))
         if not self._evaluate_dialogue_quality(messages):
             return False
             
         return True
 
-    def _evaluate_dialogue_quality(self, messages: List[Dict]) -> bool:
-        """评估对话质量"""
-        return True # 暂时关闭对话质量评估 目前优先解决当前问题
-
-        # 计算工具调用次数
-        tool_calls = sum(1 for msg in messages if "get_search_page" in msg.get("content", ""))
-        
-        # 检查重复内容
-        unique_contents = set()
-        for msg in messages:
-            content = msg.get("content", "")
-            if content in unique_contents:
-                return False
-            unique_contents.add(content)
-            
-        # 检查对话进展
-        if tool_calls == 0:
-            return False
-            
-        return True
-    
     def process_topic(self, topic: str) -> Dict:
         """处理完整的工作流程"""
         try:

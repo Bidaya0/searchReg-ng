@@ -17,6 +17,7 @@ requests = ">=2.31.0"
 pyyaml = ">=6.0.1"
 python-dotenv = ">=1.0.0"
 langgraph = "^0.3.29"
+scikit-learn = "^1.6.1"
 
 
 [build-system]
