@@ -1,4 +1,5 @@
 from search_agent import SearchAgentSystem
+from question_agent import QuestionAgentSystem
 from config import get_config
 import argparse
 
@@ -8,13 +9,15 @@ def main():
     parser.add_argument("--topic", type=str, help="要搜索的主题")
     parser.add_argument("--max_results", type=int, default=20, help="最大结果数量")
     parser.add_argument("--interactive", action="store_true", help="交互式模式，从标准输入获取主题")
+    parser.add_argument("--questions", action="store_true", help="启用问题生成模式：基于5个方向生成25个问题")
     args = parser.parse_args()
     
     # 获取配置
     config = get_config()
     
-    # 初始化搜索代理系统
+    # 初始化系统
     search_system = SearchAgentSystem(config)
+    question_system = QuestionAgentSystem(config)
     
     # 获取主题
     if args.interactive:
@@ -26,11 +29,14 @@ def main():
             return
         topic = args.topic
     
-    # 处理主题
-    result = search_system.process_topic(topic)
+    # 分支：问题生成模式 or 搜索模式
+    if args.questions:
+        result = question_system.generate_questions(topic)
+    else:
+        result = search_system.process_topic(topic)
     
     # 输出结果
-    if result["status"] == "completed":
+    if result.get("status") == "completed" or result.get("total_questions"):
         print("\n=== 对话历史结果 ===")
         print(result)
 

@@ -1,7 +1,16 @@
 from .base import StorageInterface
 from .file_system import FileSystemStorage
 from .factory import StorageFactory
-from .models import SearchItem, SearchResult, ChatMessage, FinalResult, ErrorLog
+from .models import (
+    SearchItem,
+    SearchResult,
+    ChatMessage,
+    FinalResult,
+    ErrorLog,
+    QuestionsResult,
+    QuestionDirection,
+    QuestionItem,
+)
 
 __all__ = [
     'StorageInterface',
@@ -11,5 +20,8 @@ __all__ = [
     'SearchResult',
     'ChatMessage',
     'FinalResult',
-    'ErrorLog'
+    'ErrorLog',
+    'QuestionsResult',
+    'QuestionDirection',
+    'QuestionItem',
 ] 

@@ -37,3 +37,24 @@ class ErrorLog(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
     status: str = "error"
     termination_reason: str = "system_error" 
+
+
+class QuestionItem(BaseModel):
+    """单个问题项"""
+    question: str
+    intent: str | None = None
+
+
+class QuestionDirection(BaseModel):
+    """问题方向及其问题集合"""
+    direction: str
+    rationale: str | None = None
+    questions: List[QuestionItem] = Field(default_factory=list)
+
+
+class QuestionsResult(BaseModel):
+    """按方向组织的25问结果"""
+    topic: str
+    directions: List[QuestionDirection] = Field(default_factory=list)
+    total_questions: int = 0
+    timestamp: datetime = Field(default_factory=datetime.now)
