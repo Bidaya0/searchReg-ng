@@ -10,6 +10,7 @@ import yaml
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+from storage import StorageFactory, SearchResult, FinalResult, ErrorLog
 
 class SearchAgentSystem:
     def __init__(self, config: Dict[str, Any]):
@@ -25,6 +26,12 @@ class SearchAgentSystem:
             "temperature": 0.7,
             "max_tokens": 1000,
         }
+        
+        # 初始化存储系统
+        self.storage = StorageFactory.create_storage(
+            "file_system",
+            {"base_dir": "./data"}
+        )
         
         # 初始化 Searx 搜索
         self.search = SearxSearchWrapper(searx_host=config.get("searx_host", "http://127.0.0.1:8080"))
@@ -121,27 +128,29 @@ class SearchAgentSystem:
                     engines=['presearch'],
                     num_results=max_results
                 )
-                
                 if len(results) == 1:
                     return "搜索失败，请重试或尝试其他查询。"
                 
                 # 格式化搜索结果
-                search_result = [
-                    {
-                        "title": i.get("title", ""),
-                        "snippet": i.get("snippet", ""),
-                        "link": i.get("link", "")
-                    } for i in results
-                ]
+                search_result = SearchResult(
+                    query=query,
+                    results=[
+                        {
+                            "title": i.get("title", ""),
+                            "snippet": i.get("snippet", ""),
+                            "link": i.get("link", "")
+                        } for i in results
+                    ]
+                )
                 
                 # 保存搜索结果
-                self._save_to_file(
-                    {"query": query, "results": search_result},
+                self.storage.save(
+                    search_result.dict(),
                     "cache",
                     f"search_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 )
                 
-                return yaml.dump(search_result, allow_unicode=True)
+                return yaml.dump(search_result.dict(), allow_unicode=True)
             except Exception as e:
                 raise Exception(f"搜索执行失败: {str(e)}")
         
@@ -342,34 +351,34 @@ class SearchAgentSystem:
             )
             
             # 构建最终结果
-            final_result = {
-                "status": self.dialogue_status,
-                "termination_reason": self.termination_reason,
-                "search_results": self.current_search_results,
-                "summaries": self.current_summaries,
-                "key_points": self.current_key_points,
-                "chat_history": chat_result.chat_history,
-                "timestamp": datetime.now().isoformat()
-            }
+            final_result = FinalResult(
+                status=self.dialogue_status,
+                termination_reason=self.termination_reason,
+                search_results=self.current_search_results,
+                summaries=self.current_summaries,
+                key_points=self.current_key_points,
+                chat_history=chat_result.chat_history
+            )
             
             # 保存结果
-            self._save_to_file(
-                final_result,
+            self.storage.save(
+                final_result.dict(),
                 "results",
                 f"final_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             )
             
-            return final_result
+            return final_result.dict()
             
         except Exception as e:
             # 错误处理
-            error_log = {
-                "error": str(e),
-                "topic": topic,
-                "timestamp": datetime.now().isoformat(),
-                "status": "error",  # 只有真正的错误才使用error状态
-                "termination_reason": "system_error"
-            }
-            self._save_to_file(error_log, "logs", f"error_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            error_log = ErrorLog(
+                error=str(e),
+                topic=topic
+            )
+            self.storage.save(
+                error_log.dict(),
+                "logs",
+                f"error_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
             
-            return error_log 
+            return error_log.dict() 
