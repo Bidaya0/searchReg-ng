@@ -182,7 +182,13 @@ class SearchAgentSystem:
         """保存数据到本地文件"""
         file_path = f"./data/{file_type}/{filename}.json"
         with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(
+                data,
+                f,
+                ensure_ascii=False,
+                indent=2,
+                default=lambda o: o.isoformat() if hasattr(o, 'isoformat') else str(o)
+            )
     
     def _calculate_message_similarity(self, message1: str, message2: str) -> float:
         """计算两条消息的相似度"""

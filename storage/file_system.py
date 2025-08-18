@@ -2,6 +2,7 @@ from typing import Any, List, Optional
 import json
 import os
 from pathlib import Path
+from datetime import datetime, date
 from .base import StorageInterface
 
 class FileSystemStorage(StorageInterface):
@@ -53,9 +54,16 @@ class FileSystemStorage(StorageInterface):
         try:
             file_path = self._get_file_path(file_type, filename)
             with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+                json.dump(
+                    data,
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=self._json_default_serializer,
+                )
             return True
         except Exception as e:
+            print()
             print(f"保存文件失败: {str(e)}")
             return False
     
@@ -117,3 +125,24 @@ class FileSystemStorage(StorageInterface):
         except Exception as e:
             print(f"删除文件失败: {str(e)}")
             return False 
+
+    @staticmethod
+    def _json_default_serializer(obj: Any):
+        """将不可 JSON 序列化的对象转换为可序列化形式"""
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        # 兼容 Pydantic v1/v2 的模型
+        try:
+            # Pydantic v2
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump(mode="json")
+            # Pydantic v1
+            if hasattr(obj, "dict"):
+                return obj.dict()
+        except Exception:
+            pass
+        # 常见集合类型
+        if isinstance(obj, set):
+            return list(obj)
+        # 兜底：转为字符串
+        return str(obj)

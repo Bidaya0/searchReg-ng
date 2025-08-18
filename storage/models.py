@@ -24,10 +24,10 @@ class FinalResult(BaseModel):
     """最终结果"""
     status: str
     termination_reason: Optional[str] = None
-    search_results: List[SearchResult] = []
-    summaries: List[str] = []
-    key_points: List[str] = []
-    chat_history: List[ChatMessage] = []
+    search_results: List[SearchResult] = Field(default_factory=list)
+    summaries: List[str] = Field(default_factory=list)
+    key_points: List[str] = Field(default_factory=list)
+    chat_history: List[ChatMessage] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=datetime.now)
 
 class ErrorLog(BaseModel):
