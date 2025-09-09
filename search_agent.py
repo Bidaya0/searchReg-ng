@@ -387,4 +387,40 @@ class SearchAgentSystem:
                 f"error_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             )
             
-            return error_log.dict() 
+            return error_log.dict()
+
+    def direct_search(self, query: str, max_results: int = 20) -> SearchResult:
+        """直接执行搜索，不依赖多轮对话"""
+        try:
+            results = self.search.results(
+                query,
+                engines=['presearch'],
+                num_results=max_results
+            )
+            
+            if len(results) <= 1:
+                raise Exception("搜索结果为空或过少")
+            
+            # 格式化搜索结果
+            search_result = SearchResult(
+                query=query,
+                results=[
+                    {
+                        "title": i.get("title", ""),
+                        "snippet": i.get("snippet", ""),
+                        "link": i.get("link", "")
+                    } for i in results
+                ]
+            )
+            
+            # 保存搜索结果
+            self.storage.save(
+                search_result.dict(),
+                "cache",
+                f"direct_search_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
+            
+            return search_result
+            
+        except Exception as e:
+            raise Exception(f"直接搜索失败: {str(e)}") 

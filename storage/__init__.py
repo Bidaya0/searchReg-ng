@@ -10,6 +10,8 @@ from .models import (
     QuestionsResult,
     QuestionDirection,
     QuestionItem,
+    QuestionSearchRun,
+    QuestionsSearchResult,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     'QuestionsResult',
     'QuestionDirection',
     'QuestionItem',
+    'QuestionSearchRun',
+    'QuestionsSearchResult',
 ] 

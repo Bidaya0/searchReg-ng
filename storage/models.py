@@ -58,3 +58,24 @@ class QuestionsResult(BaseModel):
     directions: List[QuestionDirection] = Field(default_factory=list)
     total_questions: int = 0
     timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class QuestionSearchRun(BaseModel):
+    """单个问题的搜索运行记录（直接搜索，不依赖多轮对话）"""
+    question: str
+    direction: str | None = None
+    query: str | None = None  # 实际查询词（可能与原问题不同）
+    search_result: SearchResult | None = None
+    error: str | None = None  # 搜索失败原因
+    retrieved_at: datetime = Field(default_factory=datetime.now)
+
+
+class QuestionsSearchResult(BaseModel):
+    """整批问题搜索结果"""
+    topic: str
+    directions: List[QuestionDirection] = Field(default_factory=list)
+    question_runs: List[QuestionSearchRun] = Field(default_factory=list)
+    total_questions: int = 0
+    completed_runs: int = 0
+    error_runs: int = 0
+    timestamp: datetime = Field(default_factory=datetime.now)
