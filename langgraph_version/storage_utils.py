@@ -26,13 +26,24 @@ class StorageUtils:
         """保存数据到文件"""
         file_path = f"{self.base_dir}/{category}/{filename}.json"
         
+        def json_serializer(obj):
+            """自定义JSON序列化器"""
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            elif hasattr(obj, 'isoformat'):
+                return obj.isoformat()
+            elif hasattr(obj, 'dict'):
+                return obj.dict()
+            else:
+                return str(obj)
+        
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(
                 data,
                 f,
                 ensure_ascii=False,
                 indent=2,
-                default=lambda o: o.isoformat() if hasattr(o, 'isoformat') else str(o)
+                default=json_serializer
             )
         
         return file_path

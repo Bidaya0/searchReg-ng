@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 from storage_models import QuestionState, QuestionDirection, QuestionItem, QuestionsResult
 from storage_utils import StorageUtils
 from config import get_config
+from logger import workflow_logger
 import json
 import re
 
@@ -57,6 +58,8 @@ class QuestionWorkflow:
     
     def _question_generator_node(self, state: QuestionState) -> QuestionState:
         """问题生成节点"""
+        workflow_logger.log_node_start("question_generator", state)
+        
         system_prompt = """你是一名问题设计专家。
         - 输入：用户给定的主题
         - 任务：围绕该主题，从5个互补且覆盖全面的方向提出共计25个高质量问题（每个方向5个）。
@@ -86,28 +89,43 @@ class QuestionWorkflow:
         
         messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(content=f"主题：{state.topic}\n请基于该主题生成5个方向、共25个问题，严格遵守系统消息中的JSON格式返回。")
+            HumanMessage(content=f"主题：{state['topic']}\n请基于该主题生成5个方向、共25个问题，严格遵守系统消息中的JSON格式返回。")
         ]
         
-        response = self.llm.invoke(messages)
+        workflow_logger.log_llm_request(f"生成问题: {state['topic']}", self.config.get("model"))
         
-        # 将响应内容存储到状态中（用于JSON解析）
-        state.raw_response = response.content
+        try:
+            response = self.llm.invoke(messages)
+            workflow_logger.log_llm_response(response.content, self.config.get("model"))
+            
+            # 将响应内容存储到状态中（用于JSON解析）
+            state['raw_response'] = response.content
+            
+            workflow_logger.log_conversation("assistant", f"生成问题响应: {response.content[:200]}...", "question_generator")
+            workflow_logger.log_node_end("question_generator", {"response_generated": True})
+            
+        except Exception as e:
+            workflow_logger.log_error(f"问题生成失败: {str(e)}", "question_generator")
+            state['error'] = f"问题生成失败: {str(e)}"
         
         return state
     
     def _json_parser_node(self, state: QuestionState) -> QuestionState:
         """JSON解析节点"""
-        if not hasattr(state, 'raw_response'):
-            state.error = "没有原始响应内容"
+        workflow_logger.log_node_start("json_parser", state)
+        
+        if not state.get('raw_response'):
+            state['error'] = "没有原始响应内容"
+            workflow_logger.log_error("没有原始响应内容", "json_parser")
             return state
         
         try:
             # 提取JSON
-            json_content = self._extract_json_from_text(state.raw_response)
+            json_content = self._extract_json_from_text(state['raw_response'])
             
             if not json_content:
-                state.error = "无法从响应中提取JSON"
+                state['error'] = "无法从响应中提取JSON"
+                workflow_logger.log_error("无法从响应中提取JSON", "json_parser")
                 return state
             
             # 解析方向
@@ -137,43 +155,60 @@ class QuestionWorkflow:
                     questions=items
                 ))
             
-            state.directions = directions
-            state.total_questions = total_questions
-            state.parsed_json = json_content
+            state['directions'] = directions
+            state['total_questions'] = total_questions
+            state['parsed_json'] = json_content
+            
+            workflow_logger.log_info(f"JSON解析成功: {len(directions)}个方向, {total_questions}个问题", "json_parser")
+            workflow_logger.log_node_end("json_parser", {"directions_count": len(directions), "questions_count": total_questions})
             
         except Exception as e:
-            state.error = f"JSON解析失败: {str(e)}"
+            state['error'] = f"JSON解析失败: {str(e)}"
+            workflow_logger.log_error(f"JSON解析失败: {str(e)}", "json_parser")
         
         return state
     
     def _validator_node(self, state: QuestionState) -> QuestionState:
         """验证节点"""
+        workflow_logger.log_node_start("validator", state)
+        
         # 检查是否有错误
-        if hasattr(state, 'error') and state.error:
-            state.status = "error"
+        if state.get('error'):
+            state['status'] = "error"
+            workflow_logger.log_error(f"验证失败: {state['error']}", "validator")
+            workflow_logger.log_node_end("validator", {"status": "error", "error": state['error']})
             return state
         
         # 验证方向数量
-        if len(state.directions) != 5:
-            state.error = f"方向数量不正确，期望5个，实际{len(state.directions)}个"
-            state.status = "error"
+        if len(state.get('directions', [])) != 5:
+            state['error'] = f"方向数量不正确，期望5个，实际{len(state.get('directions', []))}个"
+            state['status'] = "error"
+            workflow_logger.log_error(f"方向数量不正确: {len(state.get('directions', []))}", "validator")
+            workflow_logger.log_node_end("validator", {"status": "error", "error": state['error']})
             return state
         
         # 验证问题数量
-        if state.total_questions != 25:
-            state.error = f"问题数量不正确，期望25个，实际{state.total_questions}个"
-            state.status = "error"
+        if state.get('total_questions', 0) != 25:
+            state['error'] = f"问题数量不正确，期望25个，实际{state.get('total_questions', 0)}个"
+            state['status'] = "error"
+            workflow_logger.log_error(f"问题数量不正确: {state.get('total_questions', 0)}", "validator")
+            workflow_logger.log_node_end("validator", {"status": "error", "error": state['error']})
             return state
         
         # 验证每个方向的问题数量
-        for i, direction in enumerate(state.directions):
+        for i, direction in enumerate(state.get('directions', [])):
             if len(direction.questions) != 5:
-                state.error = f"方向{i+1}的问题数量不正确，期望5个，实际{len(direction.questions)}个"
-                state.status = "error"
+                state['error'] = f"方向{i+1}的问题数量不正确，期望5个，实际{len(direction.questions)}个"
+                state['status'] = "error"
+                workflow_logger.log_error(f"方向{i+1}问题数量不正确: {len(direction.questions)}", "validator")
+                workflow_logger.log_node_end("validator", {"status": "error", "error": state['error']})
                 return state
         
         # 验证通过
-        state.status = "completed"
+        state['status'] = "completed"
+        workflow_logger.log_info("验证通过", "validator")
+        workflow_logger.log_node_end("validator", {"status": "completed"})
+        
         return state
     
     def _extract_json_from_text(self, text: str) -> Dict[str, Any]:
@@ -216,54 +251,80 @@ class QuestionWorkflow:
     
     def _should_retry(self, state: QuestionState) -> str:
         """决定是否重试"""
-        if state.status == "error":
+        if state.get('status') == "error":
             # 检查重试次数
-            if not hasattr(state, 'retry_count'):
-                state.retry_count = 0
+            if 'retry_count' not in state:
+                state['retry_count'] = 0
             
-            state.retry_count += 1
+            state['retry_count'] += 1
             
-            if state.retry_count < 3:  # 最多重试3次
+            if state['retry_count'] < 3:  # 最多重试3次
+                workflow_logger.log_warning(f"重试第{state['retry_count']}次", "should_retry")
                 return "retry"
             else:
+                workflow_logger.log_error("达到最大重试次数", "should_retry")
                 return "complete"
         else:
+            workflow_logger.log_info("验证通过，工作流完成", "should_retry")
             return "complete"
     
     def generate_questions(self, topic: str) -> Dict[str, Any]:
         """生成问题的主流程"""
+        workflow_logger.log_workflow_start("QuestionWorkflow", topic)
+        
         try:
             # 初始化状态
-            initial_state = QuestionState(topic=topic)
+            initial_state: QuestionState = {
+                "topic": topic,
+                "directions": [],
+                "total_questions": 0,
+                "status": "running",
+                "error": None,
+                "raw_response": None,
+                "parsed_json": None,
+                "retry_count": 0
+            }
+            
+            workflow_logger.log_debug("初始化状态完成", initial_state)
             
             # 运行工作流
             final_state = self.workflow.invoke(initial_state)
             
+            workflow_logger.log_debug("工作流执行完成", final_state)
+            
             # 构建结果
-            if final_state.status == "completed":
+            if final_state.get('status') == "completed":
                 result = QuestionsResult(
                     topic=topic,
-                    directions=final_state.directions,
-                    total_questions=final_state.total_questions
+                    directions=final_state.get('directions', []),
+                    total_questions=final_state.get('total_questions', 0)
                 )
                 
                 # 保存结果
                 self.storage.save_questions_result(result)
                 
-                return result.dict()
+                result_dict = result.dict()
+                workflow_logger.log_workflow_end("QuestionWorkflow", "completed", result_dict)
+                
+                return result_dict
             else:
                 # 返回错误信息
-                return {
+                error_result = {
                     "topic": topic,
                     "status": "error",
-                    "error": getattr(final_state, 'error', '未知错误'),
+                    "error": final_state.get('error', '未知错误'),
                     "total_questions": 0
                 }
+                workflow_logger.log_workflow_end("QuestionWorkflow", "error", error_result)
+                return error_result
                 
         except Exception as e:
-            return {
+            error_result = {
                 "topic": topic,
                 "status": "error",
                 "error": str(e),
                 "total_questions": 0
             }
+            workflow_logger.log_error(f"工作流执行失败: {str(e)}", "generate_questions")
+            workflow_logger.log_workflow_end("QuestionWorkflow", "error", error_result)
+            return error_result
