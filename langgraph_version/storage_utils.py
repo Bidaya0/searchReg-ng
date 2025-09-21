@@ -20,7 +20,10 @@ class StorageUtils:
         ]
         
         for directory in directories:
-            os.makedirs(directory, exist_ok=True)
+            try:
+                os.makedirs(directory, exist_ok=True)
+            except Exception as e:
+                print(f"警告：无法创建目录 {directory}: {e}")
     
     def save(self, data: Dict[str, Any], category: str, filename: str) -> str:
         """保存数据到文件"""

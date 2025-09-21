@@ -86,8 +86,14 @@ def main():
                     for j, question in enumerate(direction['questions'], 1):
                         print(f"   {j}) {question['question']}")
             else:
-                print(f"问题生成失败：{result.get('error', '未知错误')}")
-                workflow_logger.log_error(f"问题生成失败: {result.get('error', '未知错误')}")
+                error_msg = result.get('error', '未知错误')
+                error_details = result.get('error_details', '')
+                print(f"问题生成失败：{error_msg}")
+                if error_details:
+                    print(f"详细错误信息：\n{error_details}")
+                workflow_logger.log_error(f"问题生成失败: {error_msg}")
+                if error_details:
+                    workflow_logger.log_error(f"详细错误信息:\n{error_details}")
         else:
             print(f"正在处理主题 '{topic}'...")
             workflow_logger.log_info("启动搜索模式")

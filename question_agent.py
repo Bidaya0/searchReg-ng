@@ -117,6 +117,7 @@ class QuestionAgentSystem:
         )
 
         # 直接与助手对话，期望其返回JSON字符串
+        import pdb; pdb.set_trace()
         response = self.user_proxy.initiate_chat(self.question_maker, message=prompt)
         content = response.chat_history[-1].get("content", "{}") if response and response.chat_history else "{}"
 

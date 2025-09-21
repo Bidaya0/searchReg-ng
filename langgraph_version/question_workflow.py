@@ -63,31 +63,32 @@ class QuestionWorkflow:
         workflow_logger.log_node_start("question_generator", state)
         
         system_prompt = """你是一名问题设计专家。
-        - 输入：用户给定的主题
-        - 任务：围绕该主题，从5个互补且覆盖全面的方向提出共计25个高质量问题（每个方向5个）。
-        - 输出：用严格的JSON返回，包含5个方向的名称、每个方向的设计动机（rationale）、以及5条清晰、可执行的问题。
-        - 约束：
-          1) 问题要具体、可回答，避免空泛；
-          2) 5个方向之间应有区分度，覆盖视角包括但不限于：背景/现状、目标/价值、方案/实现、风险/挑战、评估/指标 等；
-          3) 严格输出为JSON，不要自然语言解释；
-          4) 禁止使用任何代码围栏（例如 ```json 或 ```），直接输出纯JSON文本；
-          5) 问题使用中文。
-        - JSON模式：
-        {
-          "directions": [
-            {
-              "direction": "方向名称",
-              "rationale": "该方向为何重要的简述",
-              "questions": [
-                {"question": "问题1"},
-                {"question": "问题2"},
-                {"question": "问题3"},
-                {"question": "问题4"},
-                {"question": "问题5"}
-              ]
-            }, ... 共5个方向
-          ]
-        }"""
+- 输入：用户给定的主题
+- 任务：围绕该主题，从5个互补且覆盖全面的方向提出共计25个高质量问题（每个方向5个）。
+- 输出：用严格的JSON返回，包含5个方向的名称、每个方向的设计动机（rationale）、以及5条清晰、可执行的问题。
+- 约束：
+  1) 问题要具体、可回答，避免空泛；
+  2) 5个方向之间应有区分度，覆盖视角包括但不限于：背景/现状、目标/价值、方案/实现、风险/挑战、评估/指标 等；
+  3) 严格输出为JSON，不要自然语言解释；
+  4) 禁止使用任何代码围栏（例如 ```json 或 ```），直接输出纯JSON文本；
+  5) 问题使用中文。
+
+JSON格式：
+{
+  "directions": [
+    {
+      "direction": "方向名称",
+      "rationale": "该方向为何重要的简述",
+      "questions": [
+        {"question": "问题1"},
+        {"question": "问题2"},
+        {"question": "问题3"},
+        {"question": "问题4"},
+        {"question": "问题5"}
+      ]
+    }
+  ]
+}"""
         
         messages = [
             SystemMessage(content=system_prompt),
@@ -107,6 +108,8 @@ class QuestionWorkflow:
             workflow_logger.log_node_end("question_generator", {"response_generated": True})
             
         except Exception as e:
+            error_details = traceback.format_exc()
+            print(error_details)
             workflow_logger.log_error(f"问题生成失败: {str(e)}", "question_generator")
             state['error'] = f"问题生成失败: {str(e)}"
         
@@ -214,11 +217,11 @@ class QuestionWorkflow:
         return state
     
     def _extract_json_from_text(self, text: str) -> Dict[str, Any]:
-        """从文本中提取JSON"""
+        """从文本中提取JSON，支持多种格式"""
         if not text:
             return {}
         
-        # 去除常见代码围栏 ```json ... ``` 或 ``` ... ```
+        # 1. 去除常见代码围栏 ```json ... ``` 或 ``` ... ```
         fenced_match = re.search(r"```[a-zA-Z]*\n([\s\S]*?)```", text)
         if fenced_match:
             candidate = fenced_match.group(1).strip()
@@ -227,27 +230,79 @@ class QuestionWorkflow:
             except Exception:
                 pass
         
-        # 直接尝试整体解析
+        # 2. 直接尝试整体解析
         try:
-            return json.loads(text)
+            return json.loads(text.strip())
         except Exception:
             pass
         
-        # 兜底：提取第一个以 { 开头到对应 } 的片段
+        # 3. 查找JSON对象边界（支持嵌套）
         start = text.find("{")
         if start != -1:
-            brace = 0
+            brace_count = 0
+            in_string = False
+            escape_next = False
+            
             for i in range(start, len(text)):
-                if text[i] == '{':
-                    brace += 1
-                elif text[i] == '}':
-                    brace -= 1
-                    if brace == 0:
-                        fragment = text[start : i + 1]
-                        try:
-                            return json.loads(fragment)
-                        except Exception:
-                            break
+                char = text[i]
+                
+                if escape_next:
+                    escape_next = False
+                    continue
+                    
+                if char == '\\':
+                    escape_next = True
+                    continue
+                    
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                    
+                if not in_string:
+                    if char == '{':
+                        brace_count += 1
+                    elif char == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            fragment = text[start:i + 1]
+                            try:
+                                return json.loads(fragment)
+                            except Exception:
+                                break
+        
+        # 4. 尝试提取数组格式（如果存在）
+        array_start = text.find("[")
+        if array_start != -1:
+            bracket_count = 0
+            in_string = False
+            escape_next = False
+            
+            for i in range(array_start, len(text)):
+                char = text[i]
+                
+                if escape_next:
+                    escape_next = False
+                    continue
+                    
+                if char == '\\':
+                    escape_next = True
+                    continue
+                    
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                    
+                if not in_string:
+                    if char == '[':
+                        bracket_count += 1
+                    elif char == ']':
+                        bracket_count -= 1
+                        if bracket_count == 0:
+                            fragment = text[array_start:i + 1]
+                            try:
+                                return {"directions": json.loads(fragment)}
+                            except Exception:
+                                break
         
         return {}
     
@@ -295,22 +350,39 @@ class QuestionWorkflow:
             workflow_logger.log_debug("工作流执行完成", final_state)
             
             # 构建结果
-            if final_state.get('status') == "completed":
+            workflow_logger.log_debug(f"最终状态: {final_state}", "generate_questions")
+            workflow_logger.log_debug(f"状态值: {final_state.get('status')}", "generate_questions")
+            
+            # 检查是否有有效的问题数据
+            directions = final_state.get('directions', [])
+            total_questions = final_state.get('total_questions', 0)
+            
+            if directions and total_questions > 0:
+                # 有有效数据，构建结果
                 result = QuestionsResult(
                     topic=topic,
-                    directions=final_state.get('directions', []),
-                    total_questions=final_state.get('total_questions', 0)
+                    directions=directions,
+                    total_questions=total_questions
                 )
-                
-                # 保存结果
+                # 保存结构化结果
                 self.storage.save_questions_result(result)
+                
+                # 保存原始响应到缓存
+                if final_state.get('raw_response'):
+                    cache_data = {
+                        "topic": topic,
+                        "raw_response": final_state['raw_response'],
+                        "timestamp": result.timestamp.isoformat()
+                    }
+                    cache_filename = f"questions_raw_{result.timestamp.strftime('%Y%m%d_%H%M%S')}"
+                    self.storage.save(cache_data, "cache", cache_filename)
                 
                 result_dict = result.dict()
                 workflow_logger.log_workflow_end("QuestionWorkflow", "completed", result_dict)
-                
+                result_dict['status'] = "completed"
                 return result_dict
             else:
-                # 返回错误信息
+                # 没有有效数据，返回错误信息
                 error_result = {
                     "topic": topic,
                     "status": "error",
