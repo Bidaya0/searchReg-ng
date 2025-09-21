@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 from storage_models import SearchState, SearchResult, ChatMessage, FinalResult, ErrorLog
 from search_tools import SearchTools
 from storage_utils import StorageUtils
+from memory_manager import MemoryManager
 from config import get_config
 from logger import workflow_logger
 import json
@@ -17,6 +18,7 @@ class SearchWorkflow:
         self.config = config
         self.storage = StorageUtils()
         self.search_tools = SearchTools(config.get("searx_host"), self.storage)
+        self.memory_manager = MemoryManager(self.storage)
         
         # 初始化LLM
         self.llm = ChatOpenAI(
@@ -35,18 +37,22 @@ class SearchWorkflow:
         workflow = StateGraph(SearchState)
         
         # 添加节点
+        workflow.add_node("memory_loader", self._memory_loader_node)
         workflow.add_node("topic_analyzer", self._topic_analyzer_node)
         workflow.add_node("search_executor", self._search_executor_node)
         workflow.add_node("content_recorder", self._content_recorder_node)
+        workflow.add_node("memory_updater", self._memory_updater_node)
         workflow.add_node("quality_checker", self._quality_checker_node)
         
         # 设置入口点
-        workflow.set_entry_point("topic_analyzer")
+        workflow.set_entry_point("memory_loader")
         
         # 添加边
+        workflow.add_edge("memory_loader", "topic_analyzer")
         workflow.add_edge("topic_analyzer", "search_executor")
         workflow.add_edge("search_executor", "content_recorder")
-        workflow.add_edge("content_recorder", "quality_checker")
+        workflow.add_edge("content_recorder", "memory_updater")
+        workflow.add_edge("memory_updater", "quality_checker")
         
         # 条件边
         workflow.add_conditional_edges(
@@ -60,6 +66,80 @@ class SearchWorkflow:
         
         return workflow.compile()
     
+    def _memory_loader_node(self, state: SearchState) -> SearchState:
+        """记忆加载节点"""
+        workflow_logger.log_node_start("memory_loader", state)
+        
+        try:
+            # 加载记忆数据
+            memory_data = self.memory_manager.load_memory()
+            
+            # 初始化记忆相关字段
+            state['historical_topics'] = memory_data.get('historical_topics', [])
+            state['learning_mode'] = memory_data.get('user_preferences', {}).get('learning_mode', True)
+            state['knowledge_graph'] = memory_data.get('knowledge_graph', {})
+            state['related_concepts'] = self.memory_manager.get_related_concepts(state['topic'], memory_data)
+            state['user_preferences'] = memory_data.get('user_preferences', {})
+            state['session_memory'] = {}
+            state['context_memory'] = self.memory_manager.get_context_memory(state['topic'], memory_data)
+            state['search_patterns'] = memory_data.get('search_patterns', [])
+            
+            # 添加主题到历史记录
+            memory_data = self.memory_manager.add_topic_to_history(state['topic'], memory_data)
+            self.memory_manager.save_memory(memory_data)
+            
+            # 生成记忆上下文消息
+            context_info = self._generate_memory_context_message(state)
+            if context_info:
+                context_message = AIMessage(content=context_info)
+                if 'messages' not in state:
+                    state['messages'] = []
+                state['messages'].append(context_message)
+            
+            workflow_logger.log_info(f"加载记忆完成: 历史主题{len(state['historical_topics'])}个, 相关概念{len(state['related_concepts'])}个", "memory_loader")
+            workflow_logger.log_node_end("memory_loader", {"memory_loaded": True})
+            
+        except Exception as e:
+            workflow_logger.log_error(f"记忆加载失败: {str(e)}", "memory_loader")
+            # 初始化默认值
+            state['historical_topics'] = []
+            state['learning_mode'] = True
+            state['knowledge_graph'] = {}
+            state['related_concepts'] = []
+            state['user_preferences'] = {}
+            state['session_memory'] = {}
+            state['context_memory'] = []
+            state['search_patterns'] = []
+        
+        return state
+    
+    def _generate_memory_context_message(self, state: SearchState) -> str:
+        """生成记忆上下文消息"""
+        context_parts = []
+        
+        # 历史主题信息
+        if state.get('historical_topics'):
+            recent_topics = state['historical_topics'][-3:]  # 最近3个主题
+            context_parts.append(f"相关历史主题: {', '.join(recent_topics)}")
+        
+        # 相关概念信息
+        if state.get('related_concepts'):
+            concepts = state['related_concepts'][:5]  # 前5个概念
+            context_parts.append(f"相关概念: {', '.join(concepts)}")
+        
+        # 学习模式信息
+        if state.get('learning_mode'):
+            context_parts.append("学习模式已启用，将记录和关联新知识")
+        
+        # 上下文记忆信息
+        if state.get('context_memory'):
+            context_parts.append(f"发现 {len(state['context_memory'])} 个相关上下文")
+        
+        if context_parts:
+            return f"记忆上下文:\n" + "\n".join(f"- {part}" for part in context_parts)
+        
+        return ""
+    
     def _topic_analyzer_node(self, state: SearchState) -> SearchState:
         """主题分析节点"""
         workflow_logger.log_node_start("topic_analyzer", state)
@@ -69,7 +149,9 @@ class SearchWorkflow:
         1. 分析主题的核心概念，并进行扩展性陈述。
         2. 评估主题的搜索难度。
         3. 根据已有搜索结果，生成新的搜索建议。
-        4. 给搜索执行器提供具体的搜索查询建议。"""
+        4. 给搜索执行器提供具体的搜索查询建议。
+        5. 利用历史记忆和知识图谱，发现主题间的关联。
+        6. 在学习模式下，特别关注新概念的学习和关联。"""
         
         messages = [
             SystemMessage(content=system_prompt),
@@ -235,6 +317,65 @@ class SearchWorkflow:
         
         return state
     
+    def _memory_updater_node(self, state: SearchState) -> SearchState:
+        """记忆更新节点"""
+        workflow_logger.log_node_start("memory_updater", state)
+        
+        try:
+            # 加载当前记忆数据
+            memory_data = self.memory_manager.load_memory()
+            
+            # 更新知识图谱
+            if state.get('search_results'):
+                memory_data = self.memory_manager.update_knowledge_graph(
+                    state['topic'], 
+                    state['search_results'], 
+                    memory_data
+                )
+            
+            # 更新搜索模式
+            if state.get('current_query'):
+                success = len(state.get('search_results', [])) > 0
+                memory_data = self.memory_manager.update_search_patterns(
+                    state['topic'],
+                    state['current_query'],
+                    success,
+                    memory_data
+                )
+            
+            # 更新会话记忆
+            session_data = {
+                'topic': state['topic'],
+                'search_count': len(state.get('search_results', [])),
+                'summary_count': len(state.get('summaries', [])),
+                'key_points_count': len(state.get('key_points', [])),
+                'iteration_count': state.get('iteration_count', 0)
+            }
+            memory_data = self.memory_manager.update_session_memory(session_data, memory_data)
+            
+            # 保存更新后的记忆
+            self.memory_manager.save_memory(memory_data)
+            
+            # 更新状态中的记忆字段
+            state['knowledge_graph'] = memory_data.get('knowledge_graph', {})
+            state['search_patterns'] = memory_data.get('search_patterns', [])
+            
+            # 生成学习洞察消息
+            insights = self.memory_manager.get_learning_insights(memory_data)
+            if insights and state.get('learning_mode'):
+                insight_message = AIMessage(content=f"学习洞察:\n" + "\n".join(f"- {insight}" for insight in insights))
+                if 'messages' not in state:
+                    state['messages'] = []
+                state['messages'].append(insight_message)
+            
+            workflow_logger.log_info(f"记忆更新完成: 知识图谱{len(memory_data.get('knowledge_graph', {}))}个主题", "memory_updater")
+            workflow_logger.log_node_end("memory_updater", {"memory_updated": True})
+            
+        except Exception as e:
+            workflow_logger.log_error(f"记忆更新失败: {str(e)}", "memory_updater")
+        
+        return state
+    
     def _quality_checker_node(self, state: SearchState) -> SearchState:
         """质量检查节点"""
         workflow_logger.log_node_start("quality_checker", state)
@@ -257,12 +398,24 @@ class SearchWorkflow:
             workflow_logger.log_node_end("quality_checker", {"termination_reason": "max_iterations"})
             return state
         
-        # 检查是否有足够的搜索结果
-        if len(state.get('search_results', [])) >= 3:
+        # 基于记忆的智能终止条件
+        search_results_count = len(state.get('search_results', []))
+        
+        # 检查是否有足够的搜索结果（基于历史模式调整阈值）
+        min_results = self._get_adaptive_min_results(state)
+        if search_results_count >= min_results:
             state['status'] = "completed"
             state['termination_reason'] = "sufficient_results"
-            workflow_logger.log_info(f"获得足够搜索结果: {len(state.get('search_results', []))}条", "quality_checker")
+            workflow_logger.log_info(f"获得足够搜索结果: {search_results_count}条 (阈值: {min_results})", "quality_checker")
             workflow_logger.log_node_end("quality_checker", {"termination_reason": "sufficient_results"})
+            return state
+        
+        # 检查知识图谱覆盖度
+        if self._check_knowledge_coverage(state):
+            state['status'] = "completed"
+            state['termination_reason'] = "knowledge_coverage"
+            workflow_logger.log_info("知识图谱覆盖度达到要求", "quality_checker")
+            workflow_logger.log_node_end("quality_checker", {"termination_reason": "knowledge_coverage"})
             return state
         
         # 检查对话质量（简单的重复检测）
@@ -312,6 +465,56 @@ class SearchWorkflow:
         
         return len(intersection) / len(union) if union else 0.0
     
+    def _get_adaptive_min_results(self, state: SearchState) -> int:
+        """基于历史模式获取自适应最小结果数"""
+        base_min = 3
+        
+        # 基于历史搜索模式调整
+        patterns = state.get('search_patterns', [])
+        if patterns:
+            # 计算历史成功率
+            success_count = sum(1 for p in patterns if p.get('success', False))
+            success_rate = success_count / len(patterns)
+            
+            # 根据成功率调整最小结果数
+            if success_rate > 0.8:
+                return max(base_min, 2)  # 高成功率，降低要求
+            elif success_rate < 0.5:
+                return max(base_min, 5)  # 低成功率，提高要求
+        
+        # 基于学习模式调整
+        if state.get('learning_mode', False):
+            return max(base_min, 4)  # 学习模式需要更多结果
+        
+        return base_min
+    
+    def _check_knowledge_coverage(self, state: SearchState) -> bool:
+        """检查知识图谱覆盖度"""
+        topic = state['topic']
+        knowledge_graph = state.get('knowledge_graph', {})
+        
+        if topic not in knowledge_graph:
+            return False
+        
+        topic_data = knowledge_graph[topic]
+        concepts = topic_data.get('concepts', [])
+        relationships = topic_data.get('relationships', [])
+        
+        # 检查概念数量
+        if len(concepts) < 5:
+            return False
+        
+        # 检查关系数量
+        if len(relationships) < 3:
+            return False
+        
+        # 检查搜索次数（需要多次搜索才能建立好的知识图谱）
+        search_count = topic_data.get('search_count', 0)
+        if search_count < 2:
+            return False
+        
+        return True
+    
     def _should_continue(self, state: SearchState) -> str:
         """决定是否继续工作流"""
         if state.get('status') == "completed":
@@ -337,7 +540,16 @@ class SearchWorkflow:
                 "status": "running",
                 "termination_reason": None,
                 "iteration_count": 0,
-                "max_iterations": 20
+                "max_iterations": 20,
+                # 记忆相关字段将在memory_loader节点中初始化
+                "historical_topics": [],
+                "learning_mode": True,
+                "knowledge_graph": {},
+                "related_concepts": [],
+                "user_preferences": {},
+                "session_memory": {},
+                "context_memory": [],
+                "search_patterns": []
             }
             
             workflow_logger.log_debug("初始化状态完成", initial_state)

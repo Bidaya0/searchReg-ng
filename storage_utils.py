@@ -80,3 +80,41 @@ class StorageUtils:
         """保存错误日志"""
         filename = f"error_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         return self.save(error_log.dict(), "logs", filename)
+    
+    def save_memory_data(self, memory_data: Dict[str, Any]) -> str:
+        """保存记忆数据"""
+        filename = "memory_data"
+        return self.save(memory_data, "cache", filename)
+    
+    def load_memory_data(self) -> Dict[str, Any]:
+        """加载记忆数据"""
+        return self.load("cache", "memory_data")
+    
+    def save_knowledge_graph(self, knowledge_graph: Dict[str, Any]) -> str:
+        """保存知识图谱"""
+        filename = "knowledge_graph"
+        return self.save(knowledge_graph, "cache", filename)
+    
+    def load_knowledge_graph(self) -> Dict[str, Any]:
+        """加载知识图谱"""
+        return self.load("cache", "knowledge_graph")
+    
+    def backup_memory(self) -> str:
+        """备份记忆数据"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        memory_data = self.load_memory_data()
+        if memory_data:
+            filename = f"memory_backup_{timestamp}"
+            return self.save(memory_data, "cache", filename)
+        return ""
+    
+    def restore_memory(self, backup_filename: str) -> bool:
+        """从备份恢复记忆数据"""
+        try:
+            backup_data = self.load("cache", backup_filename)
+            if backup_data:
+                self.save_memory_data(backup_data)
+                return True
+        except Exception as e:
+            print(f"恢复记忆数据失败: {e}")
+        return False

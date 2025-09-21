@@ -118,6 +118,15 @@ class SearchState(TypedDict):
     termination_reason: Optional[str]
     iteration_count: int
     max_iterations: int
+    # 新增记忆相关字段
+    historical_topics: List[str]  # 历史搜索主题
+    learning_mode: bool  # 学习模式开关
+    knowledge_graph: Dict[str, Any]  # 知识图谱
+    related_concepts: List[str]  # 相关概念
+    user_preferences: Dict[str, Any]  # 用户偏好
+    session_memory: Dict[str, Any]  # 会话记忆
+    context_memory: List[Dict[str, Any]]  # 上下文记忆
+    search_patterns: List[Dict[str, Any]]  # 搜索模式记忆
 
 class QuestionState(TypedDict):
     """问题生成系统状态"""
