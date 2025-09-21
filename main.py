@@ -1,5 +1,6 @@
 from search_workflow import SearchWorkflow
 from question_workflow import QuestionWorkflow
+from integrated_workflow import IntegratedWorkflowController
 from config import get_config
 from logger import workflow_logger
 import argparse
@@ -12,6 +13,7 @@ def main():
     parser.add_argument("--max_results", type=int, default=20, help="最大结果数量")
     parser.add_argument("--interactive", action="store_true", help="交互式模式，从标准输入获取主题")
     parser.add_argument("--questions", action="store_true", help="启用问题生成模式：基于5个方向生成25个问题")
+    parser.add_argument("--integrated", action="store_true", help="启用集成工作流模式：问题生成+搜索+汇总")
     args = parser.parse_args()
     
     try:
@@ -33,6 +35,7 @@ def main():
         workflow_logger.log_info("正在初始化系统...")
         search_system = SearchWorkflow(config)
         question_system = QuestionWorkflow(config)
+        integrated_system = IntegratedWorkflowController(config)
         workflow_logger.log_info("系统初始化完成")
         
     except Exception as e:
@@ -65,9 +68,50 @@ def main():
         print(f"错误：获取主题失败 - {str(e)}")
         sys.exit(1)
     
-    # 分支：问题生成模式 or 搜索模式
+    # 分支：问题生成模式 or 搜索模式 or 集成工作流模式
     try:
-        if args.questions:
+        if args.integrated:
+            print(f"正在为主题 '{topic}' 执行集成工作流...")
+            workflow_logger.log_info("启动集成工作流模式")
+            result = integrated_system.process_topic(topic)
+            
+            if result.get("status") == "completed":
+                print(f"\n=== 集成工作流结果 ===")
+                print(f"主题：{result['topic']}")
+                print(f"生成问题数：{len(result.get('questions', []))}")
+                print(f"搜索结果数：{len(result.get('search_results', []))}")
+                print(f"处理时间：{result.get('execution_stats', {}).get('total_time', 'N/A')}秒")
+                
+                # 显示综合总结
+                if result.get('comprehensive_summary'):
+                    summary = result['comprehensive_summary']
+                    print(f"\n=== 综合总结 ===")
+                    if summary.get('executive_summary'):
+                        print(f"执行摘要：\n{summary['executive_summary']}")
+                    
+                    if summary.get('key_insights'):
+                        print(f"\n关键洞察：")
+                        for i, insight in enumerate(summary['key_insights'], 1):
+                            print(f"  {i}. {insight}")
+                    
+                    if summary.get('recommendations'):
+                        print(f"\n建议和后续行动：")
+                        for i, rec in enumerate(summary['recommendations'], 1):
+                            print(f"  {i}. {rec}")
+                
+                # 显示执行统计
+                if result.get('execution_stats'):
+                    stats = result['execution_stats']
+                    print(f"\n=== 执行统计 ===")
+                    print(f"总处理时间：{stats.get('total_time', 'N/A')}秒")
+                    print(f"问题生成数：{stats.get('questions_generated', 0)}")
+                    print(f"搜索完成数：{stats.get('searches_completed', 0)}")
+                    print(f"搜索错误数：{stats.get('search_errors', 0)}")
+                    print(f"成功率：{stats.get('success_rate', 0):.2%}")
+            else:
+                print(f"集成工作流失败：{result.get('error', '未知错误')}")
+                workflow_logger.log_error(f"集成工作流失败: {result.get('error', '未知错误')}")
+        elif args.questions:
             print(f"正在为主题 '{topic}' 生成问题...")
             workflow_logger.log_info("启动问题生成模式")
             result = question_system.generate_questions(topic)
