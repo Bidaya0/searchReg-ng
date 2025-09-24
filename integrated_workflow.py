@@ -14,6 +14,8 @@ import traceback
 
 from storage_models import QuestionState, QuestionDirection, QuestionItem, QuestionsResult
 from storage_models import SearchState, SearchResult, ChatMessage, FinalResult, ErrorLog
+from storage_models import SearchRoundRecord, IntegratedWorkflowRecord
+from email_formatter import EmailFormatter
 from search_tools import SearchTools
 from storage_utils import StorageUtils
 from memory_manager import MemoryManager
@@ -60,6 +62,11 @@ class IntegratedWorkflowState(TypedDict):
     # 最终结果
     final_report: Optional[Dict[str, Any]]
     report_generated: bool
+    
+    # 记录相关
+    workflow_record: Optional[IntegratedWorkflowRecord]
+    search_rounds: List[SearchRoundRecord]
+    workflow_id: str
 
 
 class IntegratedWorkflowController:
@@ -86,6 +93,10 @@ class IntegratedWorkflowController:
         self.max_workers = config.get('max_concurrent_searches', 5)
         self.search_timeout = config.get('search_timeout', 30)
         self.retry_count = config.get('search_retry_count', 3)
+        
+        # 记录相关
+        self.workflow_records = []
+        self.email_formatter = EmailFormatter()
         
         # 创建状态图
         try:
@@ -295,6 +306,8 @@ class IntegratedWorkflowController:
                 
                 # 收集结果
                 completed_count = 0
+                all_search_rounds = []
+                
                 for future in as_completed(future_to_task, timeout=self.search_timeout * len(questions)):
                     task = future_to_task[future]
                     try:
@@ -304,15 +317,27 @@ class IntegratedWorkflowController:
                             task['status'] = "completed"
                             task['completed_at'] = datetime.now()
                             task['search_result'] = result
+                            
+                            # 收集搜索轮次记录
+                            if 'search_rounds' in task:
+                                all_search_rounds.extend(task['search_rounds'])
                         else:
                             task['status'] = "failed"
                             task['error'] = "搜索返回空结果"
                             state['search_errors'].append(f"任务 {task['question_id']}: 搜索返回空结果")
+                            
+                            # 收集失败的搜索轮次记录
+                            if 'search_rounds' in task:
+                                all_search_rounds.extend(task['search_rounds'])
                     except Exception as e:
                         task['status'] = "failed"
                         task['error'] = str(e)
                         state['search_errors'].append(f"任务 {task['question_id']}: {str(e)}")
                         workflow_logger.log_error(f"搜索任务失败: {task['question_id']} - {str(e)}")
+                        
+                        # 收集异常的搜索轮次记录
+                        if 'search_rounds' in task:
+                            all_search_rounds.extend(task['search_rounds'])
                     
                     completed_count += 1
                     state['search_progress'] = {
@@ -320,10 +345,30 @@ class IntegratedWorkflowController:
                         "total": len(search_tasks),
                         "success_rate": len(state['search_results']) / completed_count if completed_count > 0 else 0
                     }
+                
+                # 将所有搜索轮次记录添加到状态中
+                state['search_rounds'] = all_search_rounds
             
             state['search_completed'] = True
-            workflow_logger.log_info(f"并行搜索完成，成功 {len(state['search_results'])} 个，失败 {len(questions) - len(state['search_results'])} 个", "parallel_search")
-            workflow_logger.log_node_end("parallel_search", {"completed": True, "results_count": len(state['search_results'])})
+            
+            # 记录详细的搜索统计
+            successful_rounds = [r for r in all_search_rounds if r.success]
+            failed_rounds = [r for r in all_search_rounds if not r.success]
+            
+            workflow_logger.log_info(f"并行搜索完成，成功 {len(successful_rounds)} 个，失败 {len(failed_rounds)} 个", "parallel_search")
+            
+            # 如果有失败的搜索，记录详细错误信息
+            if failed_rounds:
+                workflow_logger.log_warning(f"失败的搜索轮次：{len(failed_rounds)}个")
+                for failed_round in failed_rounds[:5]:  # 只记录前5个失败的原因
+                    workflow_logger.log_warning(f"失败原因 - 问题：{failed_round.question}, 错误：{failed_round.error_message}")
+            
+            workflow_logger.log_node_end("parallel_search", {
+                "completed": True, 
+                "results_count": len(state['search_results']),
+                "successful_rounds": len(successful_rounds),
+                "failed_rounds": len(failed_rounds)
+            })
             
         except Exception as e:
             state['search_completed'] = False
@@ -335,9 +380,11 @@ class IntegratedWorkflowController:
     
     def _execute_single_search(self, task: Dict[str, Any]) -> Optional[SearchResult]:
         """执行单个搜索任务"""
+        start_time = time.time()
         try:
             # 调用现有的SearchWorkflow
             result = self.search_workflow.process_topic(task['question'])
+            processing_time = time.time() - start_time
             
             if result.get("status") == "completed":
                 # 转换结果格式
@@ -347,12 +394,62 @@ class IntegratedWorkflowController:
                     summaries=result.get("summaries", []),
                     key_points=result.get("key_points", [])
                 )
+                
+                # 记录搜索轮次
+                search_round = SearchRoundRecord(
+                    round_number=task.get('priority', 0) + 1,
+                    question=task['question'],
+                    direction=task.get('direction', 'unknown'),
+                    search_query=task['question'],
+                    search_results=search_result.results,
+                    summary=search_result.summaries[0] if search_result.summaries else "",
+                    key_points=search_result.key_points,
+                    success=True,
+                    processing_time=processing_time
+                )
+                
+                # 将记录添加到状态中
+                if 'search_rounds' not in task:
+                    task['search_rounds'] = []
+                task['search_rounds'].append(search_round)
+                
                 return search_result
             else:
+                # 记录失败的搜索
+                search_round = SearchRoundRecord(
+                    round_number=task.get('priority', 0) + 1,
+                    question=task['question'],
+                    direction=task.get('direction', 'unknown'),
+                    search_query=task['question'],
+                    success=False,
+                    error_message=result.get('error', '未知错误'),
+                    processing_time=processing_time
+                )
+                
+                if 'search_rounds' not in task:
+                    task['search_rounds'] = []
+                task['search_rounds'].append(search_round)
+                
                 workflow_logger.log_warning(f"搜索任务失败: {task['question_id']} - {result.get('error', '未知错误')}")
                 return None
                 
         except Exception as e:
+            processing_time = time.time() - start_time
+            # 记录异常搜索
+            search_round = SearchRoundRecord(
+                round_number=task.get('priority', 0) + 1,
+                question=task['question'],
+                direction=task.get('direction', 'unknown'),
+                search_query=task['question'],
+                success=False,
+                error_message=str(e),
+                processing_time=processing_time
+            )
+            
+            if 'search_rounds' not in task:
+                task['search_rounds'] = []
+            task['search_rounds'].append(search_round)
+            
             workflow_logger.log_error(f"搜索任务执行异常: {task['question_id']} - {str(e)}")
             return None
     
@@ -567,6 +664,8 @@ class IntegratedWorkflowController:
                 "search_results": state.get('search_results', []),
                 "processed_results": state.get('processed_results', {}),
                 "comprehensive_summary": state.get('integrated_summary', {}),
+                "search_rounds": state.get('search_rounds', []),
+                "workflow_id": state.get('workflow_id', 'unknown'),
                 "execution_stats": {
                     "total_time": (datetime.now() - state['start_time']).total_seconds(),
                     "questions_generated": len(state.get('questions', [])),
@@ -582,11 +681,22 @@ class IntegratedWorkflowController:
             state['status'] = "completed"
             state['end_time'] = datetime.now()
             
-            # 保存结果
+            # 保存JSON格式结果
             self.storage.save(final_report, "results", f"integrated_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
             
-            workflow_logger.log_info("最终报告生成完成", "report_generation")
-            workflow_logger.log_node_end("report_generation", {"completed": True})
+            # 生成邮件格式报告
+            email_content = self.email_formatter.format_workflow_result(final_report)
+            email_filepath = self.email_formatter.save_email_to_file(
+                email_content, 
+                f"email_report_{state.get('workflow_id', 'unknown')}.txt"
+            )
+            
+            # 将邮件内容添加到最终报告中
+            final_report['email_content'] = email_content
+            final_report['email_filepath'] = email_filepath
+            
+            workflow_logger.log_info(f"最终报告生成完成，邮件文件保存至：{email_filepath}", "report_generation")
+            workflow_logger.log_node_end("report_generation", {"completed": True, "email_file": email_filepath})
             
         except Exception as e:
             state['report_generated'] = False
@@ -630,6 +740,9 @@ class IntegratedWorkflowController:
         workflow_logger.log_workflow_start("IntegratedWorkflow", topic)
         
         try:
+            # 生成工作流ID
+            workflow_id = f"integrated_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
             # 初始化状态
             initial_state: IntegratedWorkflowState = {
                 "topic": topic,
@@ -653,7 +766,10 @@ class IntegratedWorkflowController:
                 "summary_completed": False,
                 "summary_error": None,
                 "final_report": None,
-                "report_generated": False
+                "report_generated": False,
+                "workflow_record": None,
+                "search_rounds": [],
+                "workflow_id": workflow_id
             }
             
             # 运行工作流

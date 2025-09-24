@@ -108,6 +108,18 @@ def main():
                     print(f"搜索完成数：{stats.get('searches_completed', 0)}")
                     print(f"搜索错误数：{stats.get('search_errors', 0)}")
                     print(f"成功率：{stats.get('success_rate', 0):.2%}")
+                
+                # 显示邮件格式报告
+                if result.get('email_content'):
+                    print(f"\n=== 邮件格式报告 ===")
+                    print("邮件内容已生成并保存到文件。")
+                    if result.get('email_filepath'):
+                        print(f"邮件文件路径：{result['email_filepath']}")
+                    
+                    # 显示邮件内容的前500个字符作为预览
+                    email_preview = result['email_content'][:500]
+                    print(f"\n邮件内容预览：\n{email_preview}...")
+                    print(f"\n完整邮件内容请查看文件：{result.get('email_filepath', 'N/A')}")
             else:
                 print(f"集成工作流失败：{result.get('error', '未知错误')}")
                 workflow_logger.log_error(f"集成工作流失败: {result.get('error', '未知错误')}")

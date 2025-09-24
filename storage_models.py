@@ -101,6 +101,37 @@ class QuestionsSearchResult(BaseModelWithDatetime):
     error_runs: int = 0
     timestamp: datetime = Field(default_factory=datetime.now)
 
+class SearchRoundRecord(BaseModelWithDatetime):
+    """单轮搜索记录"""
+    round_number: int
+    question: str
+    direction: str
+    search_query: str
+    search_results: List[SearchItem] = Field(default_factory=list)
+    summary: str = ""
+    key_points: List[str] = Field(default_factory=list)
+    success: bool = True
+    error_message: str = ""
+    processing_time: float = 0.0
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class IntegratedWorkflowRecord(BaseModelWithDatetime):
+    """集成工作流完整记录"""
+    topic: str
+    workflow_id: str
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    total_questions: int = 0
+    completed_searches: int = 0
+    failed_searches: int = 0
+    search_rounds: List[SearchRoundRecord] = Field(default_factory=list)
+    final_summary: str = ""
+    key_insights: List[str] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
+    execution_stats: Dict[str, Any] = Field(default_factory=dict)
+    status: str = "running"
+    error_message: str = ""
+
 # LangGraph 状态模型 - 使用TypedDict而不是BaseModel
 from typing import TypedDict, Annotated
 from langgraph.graph.message import add_messages
