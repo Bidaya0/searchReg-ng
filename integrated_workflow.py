@@ -280,10 +280,12 @@ class IntegratedWorkflowController:
             
             # 创建搜索任务
             search_tasks = []
+            original_topic = state.get('topic', '')
             for i, question in enumerate(questions):
                 task = {
                     "question_id": f"q_{i+1}",
                     "question": question.question,
+                    "original_topic": original_topic,  # 添加原问题
                     "direction": getattr(question, 'direction', 'unknown'),
                     "priority": i,
                     "status": "pending",
@@ -384,8 +386,18 @@ class IntegratedWorkflowController:
         """执行单个搜索任务"""
         start_time = time.time()
         try:
-            # 调用现有的SearchWorkflow
-            result = self.search_workflow.process_topic(task['question'])
+            # 构建包含原问题和子问题的搜索上下文
+            original_topic = task.get('original_topic', '')
+            sub_question = task['question']
+            
+            # 如果原问题存在，将其与子问题结合
+            if original_topic and original_topic != sub_question:
+                search_context = f"原问题：{original_topic}\n子问题：{sub_question}\n\n请基于原问题和子问题生成搜索查询，确保搜索内容与原问题高度相关。"
+            else:
+                search_context = sub_question
+            
+            # 调用现有的SearchWorkflow，传入完整的搜索上下文
+            result = self.search_workflow.process_topic(search_context)
             processing_time = time.time() - start_time
             
             if result.get("status") == "completed":

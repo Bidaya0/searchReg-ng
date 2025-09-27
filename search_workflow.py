@@ -149,9 +149,10 @@ class SearchWorkflow:
         1. 分析主题的核心概念，并进行扩展性陈述。
         2. 评估主题的搜索难度。
         3. 根据已有搜索结果，生成新的搜索建议。
-        4. 给搜索执行器提供具体的搜索查询建议。
+        4. 给搜索执行器提供具体的搜索查询建议，确保搜索内容与原问题高度相关。
         5. 利用历史记忆和知识图谱，发现主题间的关联。
-        6. 在学习模式下，特别关注新概念的学习和关联。"""
+        6. 在学习模式下，特别关注新概念的学习和关联。
+        7. 如果输入包含原问题和子问题，要确保分析结果与原问题保持一致，避免偏离主题。"""
         
         messages = [
             SystemMessage(content=system_prompt),
@@ -203,10 +204,12 @@ class SearchWorkflow:
         
         # 构建搜索查询
         if not state.get('current_query'):
-            # 基于主题生成搜索查询
-            query_prompt = f"基于主题 '{state['topic']}' 生成一个具体的搜索查询词"
+            # 基于主题生成搜索查询，同时考虑原问题和子问题
+            query_prompt = f"""原问题：{state['topic']}
+
+请基于原问题生成一个具体的搜索查询词，确保搜索内容与原问题高度相关，避免偏离主题。"""
             query_response = self.llm.invoke([
-                SystemMessage(content="你是一个搜索查询生成专家，根据主题生成具体的搜索查询词。"),
+                SystemMessage(content="你是一个搜索查询生成专家，根据原问题生成具体的搜索查询词。请确保搜索查询与原问题高度相关，避免偏离主题。"),
                 HumanMessage(content=query_prompt)
             ])
             state['current_query'] = query_response.content.strip()
@@ -264,9 +267,10 @@ class SearchWorkflow:
         搜索结果可能会有多语言场景，请尝试将搜索到的结果用中文进行总结。
         你需要：
         1. 对搜索结果进行分类和标记
-        2. 生成结构化摘要
-        3. 提取关键点
-        4. 避免重复之前已经讨论过的内容"""
+        2. 生成结构化摘要，确保内容与原问题高度相关
+        3. 提取关键点，重点关注与原问题相关的信息
+        4. 避免重复之前已经讨论过的内容
+        5. 如果搜索结果偏离了原问题，要在总结中明确指出并重新聚焦到原问题"""
         
         # 获取最新的搜索结果
         latest_search = state['search_results'][-1]
