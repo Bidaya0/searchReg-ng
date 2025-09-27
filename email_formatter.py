@@ -596,6 +596,329 @@ class EmailFormatter:
             recommendations.append("帮助学习者设定SMART学习目标（具体、可衡量、可实现、相关、有时限）")
         
         return recommendations
+
+    # =====================
+    # 子问题报告生成
+    # =====================
+    def format_sub_question_report(self, question: str, search_round: Any, batch_id: str) -> str:
+        """为单个子问题生成报告"""
+        try:
+            # 提取该问题的调研链接
+            links = []
+            if hasattr(search_round, 'search_results') and search_round.search_results:
+                for item in search_round.search_results:
+                    if hasattr(item, 'link') and item.link:
+                        links.append(item.link)
+                    elif isinstance(item, dict) and item.get('link'):
+                        links.append(item['link'])
+            
+            # 去重
+            unique_links = list(dict.fromkeys(links))
+            
+            # 获取该问题的总结
+            summary_text = ''
+            if hasattr(search_round, 'summary') and search_round.summary:
+                summary_text = search_round.summary
+            else:
+                summary_text = '（该问题未能获取有效摘要）'
+            
+            # 生成子问题报告
+            report_lines = [
+                '问题:',
+                question,
+                '',
+                f'批次号: {batch_id}',
+                '',
+                '搜索关键词',
+                search_round.search_query if hasattr(search_round, 'search_query') else question,
+                '',
+                '调研过的资料链接:'
+            ]
+            
+            # 添加调研链接
+            if unique_links:
+                for url in unique_links:
+                    report_lines.append(f'- {url}')
+            else:
+                report_lines.append('- （无可用链接）')
+            
+            report_lines.extend([
+                '',
+                '总结:',
+                summary_text,
+                '',
+                '问题的汇总:',
+                f'- {question}'
+            ])
+            
+            return '\n'.join(report_lines)
+            
+        except Exception as e:
+            return f"子问题报告生成失败：{str(e)}"
+    
+    def save_sub_question_report(self, report_content: str, question_index: int, batch_id: str) -> str:
+        """保存子问题报告到文件"""
+        filename = f"sub_question_{question_index:02d}_{batch_id}.txt"
+        filepath = f"./data/results/{filename}"
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+            return filepath
+        except Exception as e:
+            return f"保存子问题报告失败：{str(e)}"
+    
+    def format_summary_report(self, result: Dict[str, Any]) -> str:
+        """生成汇总报告"""
+        try:
+            topic = result.get('topic', '')
+            workflow_id = result.get('workflow_id', 'unknown')
+            search_rounds = result.get('search_rounds', [])
+            comprehensive_summary = result.get('comprehensive_summary', {})
+            questions = result.get('questions', [])
+            
+            # 简化批次号
+            batch_id = workflow_id.replace('integrated_', '') if workflow_id.startswith('integrated_') else workflow_id
+            
+            # 收集所有调研链接
+            all_links = []
+            for round_record in search_rounds:
+                if hasattr(round_record, 'search_results') and round_record.search_results:
+                    for item in round_record.search_results:
+                        if hasattr(item, 'link') and item.link:
+                            all_links.append(item.link)
+                        elif isinstance(item, dict) and item.get('link'):
+                            all_links.append(item['link'])
+            
+            # 去重并限制数量
+            unique_links = list(dict.fromkeys(all_links))[:30]
+            
+            # 获取综合总结
+            summary_text = ''
+            if comprehensive_summary.get('executive_summary'):
+                summary_text = comprehensive_summary['executive_summary']
+            else:
+                # 合并所有子问题的总结
+                round_summaries = []
+                for round_record in search_rounds:
+                    if hasattr(round_record, 'summary') and round_record.summary:
+                        round_summaries.append(round_record.summary)
+                
+                if round_summaries:
+                    summary_text = self._combine_summaries(round_summaries)
+                else:
+                    summary_text = '（本次过程未能提取有效摘要）'
+            
+            # 生成汇总报告
+            report_lines = [
+                '问题:',
+                topic if topic else '（未提供具体问题）',
+                '',
+                f'批次号: {batch_id}',
+                '',
+                '搜索关键词'
+            ]
+            
+            # 添加所有搜索关键词
+            search_keywords = []
+            for round_record in search_rounds:
+                if hasattr(round_record, 'search_query') and round_record.search_query:
+                    search_keywords.append(round_record.search_query)
+            
+            unique_keywords = list(dict.fromkeys(search_keywords))[:15]
+            if unique_keywords:
+                for keyword in unique_keywords:
+                    report_lines.append(keyword)
+            else:
+                report_lines.append('（无搜索关键词）')
+            
+            report_lines.extend([
+                '',
+                '调研过的资料链接:'
+            ])
+            
+            # 添加所有调研链接
+            if unique_links:
+                for url in unique_links:
+                    report_lines.append(f'- {url}')
+            else:
+                report_lines.append('- （无可用链接）')
+            
+            report_lines.extend([
+                '',
+                '总结:',
+                summary_text,
+                '',
+                '问题的汇总:'
+            ])
+            
+            # 添加所有问题
+            question_list = []
+            for q in questions:
+                if isinstance(q, str):
+                    question_list.append(q)
+                elif isinstance(q, dict) and 'question' in q:
+                    question_list.append(q['question'])
+                elif hasattr(q, 'question'):
+                    question_list.append(q.question)
+            
+            if question_list:
+                for q in question_list:
+                    report_lines.append(f'- {q}')
+            else:
+                report_lines.append('- （无问题数据）')
+            
+            return '\n'.join(report_lines)
+            
+        except Exception as e:
+            return f"汇总报告生成失败：{str(e)}"
+    
+    def save_summary_report(self, report_content: str, batch_id: str) -> str:
+        """保存汇总报告到文件"""
+        filename = f"summary_report_{batch_id}.txt"
+        filepath = f"./data/results/{filename}"
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+            return filepath
+        except Exception as e:
+            return f"保存汇总报告失败：{str(e)}"
+    
+    # =====================
+    # 简洁过程报告（符合样例）- 保持向后兼容
+    # =====================
+    def format_simple_report(self, result: Dict[str, Any]) -> str:
+        """生成符合样例的简洁过程报告
+        严格按照样例格式：问题、批次号、搜索关键词、调研过的资料链接、总结、问题的汇总
+        """
+        try:
+            # 从结果中提取基本信息
+            topic = result.get('topic', '')
+            workflow_id = result.get('workflow_id', 'unknown')
+            search_rounds = result.get('search_rounds', [])
+            comprehensive_summary = result.get('comprehensive_summary', {})
+            questions = result.get('questions', [])
+            
+            # 1. 问题（主题）
+            problem_text = topic if topic else '（未提供具体问题）'
+            
+            # 2. 批次号（简化格式）
+            batch_id = workflow_id.replace('integrated_', '') if workflow_id.startswith('integrated_') else workflow_id
+            
+            # 3. 搜索关键词（从搜索轮次中提取实际的搜索查询）
+            search_keywords = []
+            for round_record in search_rounds:
+                if hasattr(round_record, 'search_query') and round_record.search_query:
+                    # 如果search_query与question不同，使用search_query
+                    if round_record.search_query != round_record.question:
+                        search_keywords.append(round_record.search_query)
+                    else:
+                        # 如果相同，使用问题作为关键词
+                        search_keywords.append(round_record.question)
+                elif hasattr(round_record, 'question') and round_record.question:
+                    search_keywords.append(round_record.question)
+            
+            # 去重并限制数量
+            unique_keywords = list(dict.fromkeys(search_keywords))[:10]
+            
+            # 4. 调研过的资料链接（从搜索轮次中提取）
+            links = []
+            for round_record in search_rounds:
+                if hasattr(round_record, 'search_results') and round_record.search_results:
+                    for item in round_record.search_results:
+                        if hasattr(item, 'link') and item.link:
+                            links.append(item.link)
+                        elif isinstance(item, dict) and item.get('link'):
+                            links.append(item['link'])
+            
+            # 去重并限制数量
+            unique_links = list(dict.fromkeys(links))[:20]
+            
+            # 5. 总结（优先使用综合摘要，其次合并轮次摘要）
+            summary_text = ''
+            if comprehensive_summary.get('executive_summary'):
+                summary_text = comprehensive_summary['executive_summary']
+            else:
+                # 从搜索轮次中提取摘要
+                round_summaries = []
+                for round_record in search_rounds:
+                    if hasattr(round_record, 'summary') and round_record.summary:
+                        round_summaries.append(round_record.summary)
+                
+                if round_summaries:
+                    summary_text = self._combine_summaries(round_summaries)
+                else:
+                    summary_text = '（本次过程未能提取有效摘要）'
+            
+            # 6. 问题的汇总（从问题列表中提取）
+            question_list = []
+            for q in questions:
+                if isinstance(q, str):
+                    question_list.append(q)
+                elif isinstance(q, dict) and 'question' in q:
+                    question_list.append(q['question'])
+                elif hasattr(q, 'question'):
+                    question_list.append(q.question)
+            
+            # 严格按照样例格式拼装
+            report_lines = [
+                '问题:',
+                problem_text,
+                '',
+                f'批次号: {batch_id}',
+                '',
+                '搜索关键词'
+            ]
+            
+            # 添加搜索关键词
+            if unique_keywords:
+                for keyword in unique_keywords:
+                    report_lines.append(keyword)
+            else:
+                report_lines.append('（无搜索关键词）')
+            
+            report_lines.extend([
+                '',
+                '调研过的资料链接:'
+            ])
+            
+            # 添加调研链接
+            if unique_links:
+                for url in unique_links:
+                    report_lines.append(f'- {url}')
+            else:
+                report_lines.append('- （无可用链接，可能因搜索异常未获取）')
+            
+            report_lines.extend([
+                '',
+                '总结:',
+                summary_text,
+                '',
+                '问题的汇总:'
+            ])
+            
+            # 添加问题汇总
+            if question_list:
+                for q in question_list:
+                    report_lines.append(f'- {q}')
+            else:
+                report_lines.append('- （无问题数据）')
+            
+            return '\n'.join(report_lines)
+            
+        except Exception as e:
+            return f"简洁报告生成失败：{str(e)}"
+
+    def save_simple_report_to_file(self, report_content: str, filename: str = None) -> str:
+        """保存简洁过程报告到文件"""
+        if not filename:
+            filename = f"simple_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        filepath = f"./data/results/{filename}"
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+            return filepath
+        except Exception as e:
+            return f"保存简洁报告失败：{str(e)}"
     
     def _generate_specific_recommendations(self, search_rounds: List[SearchRoundRecord]) -> List[str]:
         """基于搜索结果生成具体建议"""

@@ -19,5 +19,13 @@ def get_config() -> Dict[str, Any]:
             "cache_dir": "./data/cache",
             "results_dir": "./data/results",
             "logs_dir": "./data/logs"
+        },
+        "email": {
+            "mailgun_domain": os.getenv("MAILGUN_DOMAIN"),
+            "mailgun_api_key": os.getenv("MAILGUN_API_KEY"),
+            "from_email": os.getenv("FROM_EMAIL", "noreply@example.com"),
+            "to_email": os.getenv("TO_EMAIL"),
+            "cc_email": os.getenv("CC_EMAIL"),
+            "bcc_email": os.getenv("BCC_EMAIL")
         }
     }

@@ -16,6 +16,7 @@ from storage_models import QuestionState, QuestionDirection, QuestionItem, Quest
 from storage_models import SearchState, SearchResult, ChatMessage, FinalResult, ErrorLog
 from storage_models import SearchRoundRecord, IntegratedWorkflowRecord
 from email_formatter import EmailFormatter
+from email_sender import EmailSender
 from search_tools import SearchTools
 from storage_utils import StorageUtils
 from memory_manager import MemoryManager
@@ -97,6 +98,7 @@ class IntegratedWorkflowController:
         # 记录相关
         self.workflow_records = []
         self.email_formatter = EmailFormatter()
+        self.email_sender = EmailSender(config)
         
         # 创建状态图
         try:
@@ -387,13 +389,29 @@ class IntegratedWorkflowController:
             processing_time = time.time() - start_time
             
             if result.get("status") == "completed":
-                # 转换结果格式
-                search_result = SearchResult(
-                    query=task['question'],
-                    results=result.get("search_results", []),
-                    summaries=result.get("summaries", []),
-                    key_points=result.get("key_points", [])
-                )
+                # 获取搜索结果（SearchResult对象列表）
+                search_results_list = result.get("search_results", [])
+                
+                # 提取所有SearchItem对象
+                all_search_items = []
+                for search_result in search_results_list:
+                    if hasattr(search_result, 'results'):
+                        all_search_items.extend(search_result.results)
+                    elif isinstance(search_result, dict) and 'results' in search_result:
+                        # 如果是字典格式，需要转换为SearchItem对象
+                        for item_data in search_result['results']:
+                            if isinstance(item_data, dict):
+                                from storage_models import SearchItem
+                                search_item = SearchItem(
+                                    title=item_data.get('title', ''),
+                                    snippet=item_data.get('snippet', ''),
+                                    link=item_data.get('link', '')
+                                )
+                                all_search_items.append(search_item)
+                
+                # 提取摘要和关键点
+                summaries = result.get("summaries", [])
+                key_points = result.get("key_points", [])
                 
                 # 记录搜索轮次
                 search_round = SearchRoundRecord(
@@ -401,9 +419,9 @@ class IntegratedWorkflowController:
                     question=task['question'],
                     direction=task.get('direction', 'unknown'),
                     search_query=task['question'],
-                    search_results=search_result.results,
-                    summary=search_result.summaries[0] if search_result.summaries else "",
-                    key_points=search_result.key_points,
+                    search_results=all_search_items,
+                    summary=summaries[0] if summaries else "",
+                    key_points=key_points,
                     success=True,
                     processing_time=processing_time
                 )
@@ -412,6 +430,14 @@ class IntegratedWorkflowController:
                 if 'search_rounds' not in task:
                     task['search_rounds'] = []
                 task['search_rounds'].append(search_round)
+                
+                # 创建SearchResult对象返回
+                search_result = SearchResult(
+                    query=task['question'],
+                    results=all_search_items,
+                    summaries=summaries,
+                    key_points=key_points
+                )
                 
                 return search_result
             else:
@@ -684,19 +710,99 @@ class IntegratedWorkflowController:
             # 保存JSON格式结果
             self.storage.save(final_report, "results", f"integrated_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
             
-            # 生成邮件格式报告
+            # 生成邮件格式报告（保持向后兼容）
             email_content = self.email_formatter.format_workflow_result(final_report)
             email_filepath = self.email_formatter.save_email_to_file(
                 email_content, 
                 f"email_report_{state.get('workflow_id', 'unknown')}.txt"
             )
             
-            # 将邮件内容添加到最终报告中
+            # 生成子问题报告
+            batch_id = state.get('workflow_id', 'unknown').replace('integrated_', '')
+            sub_question_reports = []
+            sub_question_filepaths = []
+            
+            search_rounds = state.get('search_rounds', [])
+            questions = state.get('questions', [])
+            
+            # 为每个子问题生成独立报告
+            for i, question in enumerate(questions):
+                question_text = question.question if hasattr(question, 'question') else str(question)
+                
+                # 找到对应的搜索轮次
+                corresponding_round = None
+                for round_record in search_rounds:
+                    if hasattr(round_record, 'question') and round_record.question == question_text:
+                        corresponding_round = round_record
+                        break
+                
+                if corresponding_round:
+                    # 生成子问题报告
+                    sub_report = self.email_formatter.format_sub_question_report(
+                        question_text, corresponding_round, batch_id
+                    )
+                    sub_filepath = self.email_formatter.save_sub_question_report(
+                        sub_report, i + 1, batch_id
+                    )
+                    
+                    sub_question_reports.append(sub_report)
+                    sub_question_filepaths.append(sub_filepath)
+                    
+                    workflow_logger.log_info(f"生成子问题报告 {i+1}: {sub_filepath}", "report_generation")
+            
+            # 生成汇总报告
+            summary_report = self.email_formatter.format_summary_report(final_report)
+            summary_filepath = self.email_formatter.save_summary_report(summary_report, batch_id)
+            
+            # 生成简洁过程报告（保持向后兼容）
+            simple_report = self.email_formatter.format_simple_report(final_report)
+            simple_report_filepath = self.email_formatter.save_simple_report_to_file(
+                simple_report,
+                f"simple_report_{state.get('workflow_id', 'unknown')}.txt"
+            )
+            
+            # 将报告信息添加到最终报告中
             final_report['email_content'] = email_content
             final_report['email_filepath'] = email_filepath
+            final_report['simple_report'] = simple_report
+            final_report['simple_report_filepath'] = simple_report_filepath
+            final_report['sub_question_reports'] = sub_question_reports
+            final_report['sub_question_filepaths'] = sub_question_filepaths
+            final_report['summary_report'] = summary_report
+            final_report['summary_filepath'] = summary_filepath
+            final_report['total_sub_questions'] = len(sub_question_reports)
             
-            workflow_logger.log_info(f"最终报告生成完成，邮件文件保存至：{email_filepath}", "report_generation")
-            workflow_logger.log_node_end("report_generation", {"completed": True, "email_file": email_filepath})
+            workflow_logger.log_info(f"报告生成完成：", "report_generation")
+            workflow_logger.log_info(f"  - 邮件报告：{email_filepath}", "report_generation")
+            workflow_logger.log_info(f"  - 汇总报告：{summary_filepath}", "report_generation")
+            workflow_logger.log_info(f"  - 子问题报告：{len(sub_question_filepaths)}个", "report_generation")
+            workflow_logger.log_info(f"  - 简洁报告：{simple_report_filepath}", "report_generation")
+            
+            # 发送邮件
+            workflow_logger.log_info("开始发送邮件...", "report_generation")
+            email_result = self.email_sender.send_workflow_report(final_report)
+            
+            if email_result.get("status") == "success":
+                workflow_logger.log_info(f"邮件发送成功：{email_result.get('message_id', 'unknown')}", "report_generation")
+                final_report['email_sent'] = True
+                final_report['email_message_id'] = email_result.get('message_id')
+            elif email_result.get("status") == "skipped":
+                workflow_logger.log_warning("邮件发送跳过：配置不完整", "report_generation")
+                final_report['email_sent'] = False
+                final_report['email_skip_reason'] = email_result.get('reason')
+            else:
+                workflow_logger.log_error(f"邮件发送失败：{email_result.get('error', 'unknown')}", "report_generation")
+                final_report['email_sent'] = False
+                final_report['email_error'] = email_result.get('error')
+            
+            workflow_logger.log_node_end("report_generation", {
+                "completed": True, 
+                "email_file": email_filepath,
+                "summary_file": summary_filepath,
+                "sub_question_count": len(sub_question_filepaths),
+                "simple_file": simple_report_filepath,
+                "email_sent": final_report.get('email_sent', False)
+            })
             
         except Exception as e:
             state['report_generated'] = False
