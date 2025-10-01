@@ -103,6 +103,13 @@ JSON格式：
             
             # 将响应内容存储到状态中（用于JSON解析）
             state['raw_response'] = response.content
+            state['last_llm_response'] = response.content  # 备用字段
+            state['status'] = 'running'  # 确保状态正确
+            
+            # 添加调试信息
+            workflow_logger.log_debug(f"保存的raw_response长度: {len(response.content)}", "question_generator")
+            workflow_logger.log_debug(f"raw_response前100字符: {response.content[:100]}", "question_generator")
+            workflow_logger.log_debug(f"状态中的raw_response: {state.get('raw_response', 'None')[:100]}", "question_generator")
             
             workflow_logger.log_conversation("assistant", f"生成问题响应: {response.content[:200]}...", "question_generator")
             workflow_logger.log_node_end("question_generator", {"response_generated": True})
@@ -119,18 +126,37 @@ JSON格式：
         """JSON解析节点"""
         workflow_logger.log_node_start("json_parser", state)
         
+        # 添加调试信息
+        workflow_logger.log_debug(f"状态中的raw_response: {state.get('raw_response', 'None')}", "json_parser")
+        workflow_logger.log_debug(f"raw_response类型: {type(state.get('raw_response'))}", "json_parser")
+        
         if not state.get('raw_response'):
-            state['error'] = "没有原始响应内容"
-            workflow_logger.log_error("没有原始响应内容", "json_parser")
-            return state
+            # 尝试从日志中获取响应内容（作为备用方案）
+            workflow_logger.log_warning("没有原始响应内容，尝试其他方法", "json_parser")
+            
+            # 如果状态中有其他字段包含响应内容，尝试使用
+            if state.get('last_llm_response'):
+                state['raw_response'] = state['last_llm_response']
+                workflow_logger.log_info("使用备用响应内容", "json_parser")
+            else:
+                state['error'] = "没有原始响应内容"
+                workflow_logger.log_error("没有原始响应内容", "json_parser")
+                workflow_logger.log_node_end("json_parser", {"error": "没有原始响应内容"})
+                return state
         
         try:
             # 提取JSON
+            workflow_logger.log_debug(f"开始解析JSON，内容长度: {len(state['raw_response'])}", "json_parser")
+            workflow_logger.log_debug(f"JSON内容前500字符: {state['raw_response'][:500]}", "json_parser")
+            
             json_content = self._extract_json_from_text(state['raw_response'])
+            
+            workflow_logger.log_debug(f"解析结果: {json_content}", "json_parser")
             
             if not json_content:
                 state['error'] = "无法从响应中提取JSON"
                 workflow_logger.log_error("无法从响应中提取JSON", "json_parser")
+                workflow_logger.log_node_end("json_parser", {"error": "无法从响应中提取JSON"})
                 return state
             
             # 解析方向
@@ -219,22 +245,31 @@ JSON格式：
     def _extract_json_from_text(self, text: str) -> Dict[str, Any]:
         """从文本中提取JSON，支持多种格式"""
         if not text:
+            workflow_logger.log_debug("文本为空，返回空字典", "_extract_json_from_text")
             return {}
+        
+        workflow_logger.log_debug(f"开始提取JSON，文本长度: {len(text)}", "_extract_json_from_text")
         
         # 1. 去除常见代码围栏 ```json ... ``` 或 ``` ... ```
         fenced_match = re.search(r"```[a-zA-Z]*\n([\s\S]*?)```", text)
         if fenced_match:
             candidate = fenced_match.group(1).strip()
+            workflow_logger.log_debug(f"找到代码围栏，尝试解析: {candidate[:100]}...", "_extract_json_from_text")
             try:
-                return json.loads(candidate)
-            except Exception:
-                pass
+                result = json.loads(candidate)
+                workflow_logger.log_debug("代码围栏解析成功", "_extract_json_from_text")
+                return result
+            except Exception as e:
+                workflow_logger.log_debug(f"代码围栏解析失败: {str(e)}", "_extract_json_from_text")
         
         # 2. 直接尝试整体解析
         try:
-            return json.loads(text.strip())
-        except Exception:
-            pass
+            result = json.loads(text.strip())
+            workflow_logger.log_debug("直接解析成功", "_extract_json_from_text")
+            return result
+        except Exception as e:
+            workflow_logger.log_debug(f"直接解析失败: {str(e)}", "_extract_json_from_text")
+            workflow_logger.log_debug(f"文本内容: {repr(text[:200])}", "_extract_json_from_text")
         
         # 3. 查找JSON对象边界（支持嵌套）
         start = text.find("{")
@@ -338,6 +373,7 @@ JSON格式：
                 "status": "running",
                 "error": None,
                 "raw_response": None,
+                "last_llm_response": None,
                 "parsed_json": None,
                 "retry_count": 0
             }

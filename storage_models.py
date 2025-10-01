@@ -167,5 +167,85 @@ class QuestionState(TypedDict):
     status: str
     error: Optional[str]
     raw_response: Optional[str]
+    last_llm_response: Optional[str]  # 备用响应字段
+    parsed_json: Optional[Dict[str, Any]]
+    retry_count: int
+
+# 长时间运行工作流状态模型
+class LongRunningWorkflowState(TypedDict):
+    """长时间运行工作流状态"""
+    # 基础信息
+    topic: str
+    status: str
+    error: Optional[str]
+    start_time: datetime
+    end_time: Optional[datetime]
+    workflow_id: str
+    
+    # 时间控制
+    deadline: datetime
+    elapsed_time: float
+    remaining_time: float
+    time_warnings: List[str]
+    
+    # 迭代控制
+    current_iteration: int
+    max_iterations: int
+    iteration_budget: float
+    quality_threshold: float
+    convergence_threshold: float
+    
+    # 质量评估
+    quality_scores: List[Dict[str, Any]]
+    improvement_directions: List[str]
+    convergence_metrics: Dict[str, Any]
+    
+    # 结果累积
+    accumulated_results: List[Dict[str, Any]]
+    best_results: Dict[str, Any]
+    improvement_history: List[Dict[str, Any]]
+    
+    # 资源管理
+    resource_status: Dict[str, Any]
+    memory_pressure: bool
+    disk_pressure: bool
+    trigger_cleanup: bool
+    memory_cleanup_count: int
+    
+    # 检查点管理
+    last_checkpoint_time: Optional[datetime]
+    checkpoint_path: Optional[str]
+    custom_checkpoint_id: Optional[str]
+    force_checkpoint: bool
+    
+    # 进度跟踪
+    progress: Dict[str, Any]
+    should_continue: str
+    
+    # 原有工作流状态字段
+    questions: List[QuestionItem]
+    question_directions: List[QuestionDirection]
+    question_generation_completed: bool
+    question_generation_error: Optional[str]
+    
+    search_tasks: List[Dict[str, Any]]
+    search_results: List[SearchResult]
+    search_progress: Dict[str, Any]
+    search_completed: bool
+    search_errors: List[str]
+    
+    processed_results: Optional[Dict[str, Any]]
+    result_processing_completed: bool
+    result_processing_error: Optional[str]
+    
+    integrated_summary: Optional[Dict[str, Any]]
+    summary_completed: bool
+    summary_error: Optional[str]
+    
+    final_report: Optional[Dict[str, Any]]
+    report_generated: bool
+    
+    workflow_record: Optional[IntegratedWorkflowRecord]
+    search_rounds: List[SearchRoundRecord]
     parsed_json: Optional[Dict[str, Any]]
     retry_count: int
