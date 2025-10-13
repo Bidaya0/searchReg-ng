@@ -402,3 +402,5 @@ class LongRunningMemoryManager:
             workflow_logger.log_info("内存历史记录已清空", "LongRunningMemoryManager")
         except Exception as e:
             workflow_logger.log_error(f"清空历史记录失败: {str(e)}", "LongRunningMemoryManager")
+
+
