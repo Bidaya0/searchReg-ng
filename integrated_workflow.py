@@ -14,7 +14,7 @@ import traceback
 
 from storage_models import QuestionState, QuestionDirection, QuestionItem, QuestionsResult
 from storage_models import SearchState, SearchResult, ChatMessage, FinalResult, ErrorLog
-from storage_models import SearchRoundRecord, IntegratedWorkflowRecord
+from storage_models import SearchRoundRecord, IntegratedWorkflowRecord, DirectionScore, OptimizedReport, OptimizedWorkflowState
 from email_formatter import EmailFormatter
 from email_sender import EmailSender
 from search_tools import SearchTools
@@ -22,52 +22,16 @@ from storage_utils import StorageUtils
 from memory_manager import MemoryManager
 from config import get_config
 from logger import workflow_logger
+from direction_evaluator import DirectionEvaluator
+from report_optimizer import ReportOptimizer
 
 # 导入现有的工作流
 from question_workflow import QuestionWorkflow
 from search_workflow import SearchWorkflow
 
 
-class IntegratedWorkflowState(TypedDict):
-    """集成工作流状态类型定义"""
-    # 基础信息
-    topic: str
-    status: str
-    error: Optional[str]
-    start_time: datetime
-    end_time: Optional[datetime]
-    
-    # 问题生成阶段
-    questions: List[QuestionItem]
-    question_directions: List[QuestionDirection]
-    question_generation_completed: bool
-    question_generation_error: Optional[str]
-    
-    # 搜索阶段
-    search_tasks: List[Dict[str, Any]]
-    search_results: List[SearchResult]
-    search_progress: Dict[str, Any]
-    search_completed: bool
-    search_errors: List[str]
-    
-    # 结果处理阶段
-    processed_results: Optional[Dict[str, Any]]
-    result_processing_completed: bool
-    result_processing_error: Optional[str]
-    
-    # 汇总阶段
-    integrated_summary: Optional[Dict[str, Any]]
-    summary_completed: bool
-    summary_error: Optional[str]
-    
-    # 最终结果
-    final_report: Optional[Dict[str, Any]]
-    report_generated: bool
-    
-    # 记录相关
-    workflow_record: Optional[IntegratedWorkflowRecord]
-    search_rounds: List[SearchRoundRecord]
-    workflow_id: str
+# 使用新的优化工作流状态
+# IntegratedWorkflowState 已移动到 storage_models.py 中作为 OptimizedWorkflowState
 
 
 class IntegratedWorkflowController:
@@ -100,6 +64,10 @@ class IntegratedWorkflowController:
         self.email_formatter = EmailFormatter()
         self.email_sender = EmailSender(config)
         
+        # 新增组件
+        self.direction_evaluator = DirectionEvaluator(config)
+        self.report_optimizer = ReportOptimizer(config)
+        
         # 创建状态图
         try:
             self.workflow = self._create_workflow()
@@ -112,8 +80,8 @@ class IntegratedWorkflowController:
     def _create_workflow(self) -> StateGraph:
         """创建集成工作流"""
         try:
-            workflow_logger.log_info("开始创建集成工作流状态图")
-            workflow = StateGraph(IntegratedWorkflowState)
+            workflow_logger.log_info("开始创建优化工作流状态图")
+            workflow = StateGraph(OptimizedWorkflowState)
             workflow_logger.log_info("状态图创建成功")
         except Exception as e:
             import traceback
@@ -126,9 +94,9 @@ class IntegratedWorkflowController:
             workflow_logger.log_info("开始添加节点")
             workflow.add_node("question_generation", self._question_generation_node)
             workflow.add_node("parallel_search", self._parallel_search_node)
-            workflow.add_node("result_processing", self._result_processing_node)
-            workflow.add_node("summary_generator", self._integrated_summary_node)
-            workflow.add_node("report_generation", self._report_generation_node)
+            workflow.add_node("direction_scoring", self._direction_scoring_node)
+            workflow.add_node("report_optimization", self._report_optimization_node)
+            workflow.add_node("email_generation", self._email_generation_node)
             workflow_logger.log_info("节点添加完成")
         except Exception as e:
             import traceback
@@ -143,9 +111,9 @@ class IntegratedWorkflowController:
         try:
             workflow_logger.log_info("开始添加边")
             workflow.add_edge("question_generation", "parallel_search")
-            workflow.add_edge("parallel_search", "result_processing")
-            workflow.add_edge("result_processing", "summary_generator")
-            workflow.add_edge("summary_generator", "report_generation")
+            workflow.add_edge("parallel_search", "direction_scoring")
+            workflow.add_edge("direction_scoring", "report_optimization")
+            workflow.add_edge("report_optimization", "email_generation")
             workflow_logger.log_info("边添加完成")
         except Exception as e:
             import traceback
@@ -164,44 +132,38 @@ class IntegratedWorkflowController:
                     "error": END
                 }
             )
-            workflow_logger.log_info("条件边添加完成")
-        except Exception as e:
-            import traceback
-            workflow_logger.log_error(f"添加条件边失败: {str(e)}")
-            workflow_logger.log_error(f"调用栈:\n{traceback.format_exc()}")
-            raise
-        
-        try:
+            
             workflow.add_conditional_edges(
                 "parallel_search",
                 self._should_continue_after_search,
                 {
-                    "continue": "result_processing",
+                    "continue": "direction_scoring",
                     "error": END
                 }
             )
             
             workflow.add_conditional_edges(
-                "result_processing",
-                self._should_continue_after_processing,
+                "direction_scoring",
+                self._should_continue_after_scoring,
                 {
-                    "continue": "summary_generator",
+                    "continue": "report_optimization",
                     "error": END
                 }
             )
             
             workflow.add_conditional_edges(
-                "summary_generator",
-                self._should_continue_after_summary,
+                "report_optimization",
+                self._should_continue_after_optimization,
                 {
-                    "continue": "report_generation",
+                    "continue": "email_generation",
                     "error": END
                 }
             )
+            
             workflow_logger.log_info("所有条件边添加完成")
         except Exception as e:
             import traceback
-            workflow_logger.log_error(f"添加剩余条件边失败: {str(e)}")
+            workflow_logger.log_error(f"添加条件边失败: {str(e)}")
             workflow_logger.log_error(f"调用栈:\n{traceback.format_exc()}")
             raise
         
@@ -216,7 +178,7 @@ class IntegratedWorkflowController:
             workflow_logger.log_error(f"调用栈:\n{traceback.format_exc()}")
             raise
     
-    def _question_generation_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
+    def _question_generation_node(self, state: OptimizedWorkflowState) -> OptimizedWorkflowState:
         """问题生成节点"""
         workflow_logger.log_node_start("question_generation", state)
         
@@ -264,7 +226,7 @@ class IntegratedWorkflowController:
         
         return state
     
-    def _parallel_search_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
+    def _parallel_search_node(self, state: OptimizedWorkflowState) -> OptimizedWorkflowState:
         """并行搜索节点"""
         workflow_logger.log_node_start("parallel_search", state)
         
@@ -281,12 +243,21 @@ class IntegratedWorkflowController:
             # 创建搜索任务
             search_tasks = []
             original_topic = state.get('topic', '')
+            question_directions = state.get('question_directions', [])
+            
+            # 创建问题到方向的映射
+            question_to_direction = {}
+            for direction in question_directions:
+                for question in direction.questions:
+                    question_to_direction[question.question] = direction.direction
+            
             for i, question in enumerate(questions):
+                direction = question_to_direction.get(question.question, 'unknown')
                 task = {
                     "question_id": f"q_{i+1}",
                     "question": question.question,
-                    "original_topic": original_topic,  # 添加原问题
-                    "direction": getattr(question, 'direction', 'unknown'),
+                    "original_topic": original_topic,
+                    "direction": direction,
                     "priority": i,
                     "status": "pending",
                     "created_at": datetime.now(),
@@ -491,364 +462,174 @@ class IntegratedWorkflowController:
             workflow_logger.log_error(f"搜索任务执行异常: {task['question_id']} - {str(e)}")
             return None
     
-    def _result_processing_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
-        """结果处理节点"""
-        workflow_logger.log_node_start("result_processing", state)
+    
+    def _direction_scoring_node(self, state: OptimizedWorkflowState) -> OptimizedWorkflowState:
+        """方向评分节点"""
+        workflow_logger.log_node_start("direction_scoring", state)
         
         if not state.get('search_completed', False):
-            state['result_processing_completed'] = False
-            state['result_processing_error'] = "搜索未完成"
-            workflow_logger.log_error("搜索未完成，跳过结果处理", "result_processing")
+            state['scoring_completed'] = False
+            state['scoring_error'] = "搜索未完成"
+            workflow_logger.log_error("搜索未完成，跳过评分", "direction_scoring")
             return state
         
         try:
-            search_results = state.get('search_results', [])
-            workflow_logger.log_info(f"开始处理 {len(search_results)} 个搜索结果")
-            
-            # 简单的结果处理
-            processed_results = {
-                "total_results": len(search_results),
-                "unique_results": len(search_results),  # 简化处理，暂不去重
-                "quality_scores": {},
-                "categorized_results": {},
-                "processing_time": 0.0
-            }
-            
-            # 按方向分类结果
-            for result in search_results:
-                direction = "unknown"
-                for task in state.get('search_tasks', []):
-                    if task.get('question') == result.query:
-                        direction = task.get('direction', 'unknown')
-                        break
-                
-                if direction not in processed_results['categorized_results']:
-                    processed_results['categorized_results'][direction] = []
-                processed_results['categorized_results'][direction].append(result)
-            
-            state['processed_results'] = processed_results
-            state['result_processing_completed'] = True
-            state['result_processing_error'] = None
-            
-            workflow_logger.log_info(f"结果处理完成，分类到 {len(processed_results['categorized_results'])} 个方向", "result_processing")
-            workflow_logger.log_node_end("result_processing", {"completed": True})
-            
-        except Exception as e:
-            state['result_processing_completed'] = False
-            state['result_processing_error'] = str(e)
-            workflow_logger.log_error(f"结果处理异常: {str(e)}", "result_processing")
-            workflow_logger.log_node_end("result_processing", {"error": str(e)})
-        
-        return state
-    
-    def _integrated_summary_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
-        """综合总结节点"""
-        workflow_logger.log_node_start("summary_generator", state)
-        
-        if not state.get('result_processing_completed', False):
-            state['summary_completed'] = False
-            state['summary_error'] = "结果处理未完成"
-            workflow_logger.log_error("结果处理未完成，跳过总结", "summary_generator")
-            return state
-        
-        try:
-            processed_results = state.get('processed_results', {})
-            workflow_logger.log_info("开始生成综合总结")
-            
-            # 构建汇总提示词
-            summary_prompt = self._build_summary_prompt(processed_results, state.get('topic', ''))
-            
-            # 调用LLM生成总结
-            messages = [
-                SystemMessage(content=self._get_system_prompt()),
-                HumanMessage(content=summary_prompt)
-            ]
-            
-            response = self.llm.invoke(messages)
-            summary_content = response.content
-            
-            # 解析总结内容
-            comprehensive_summary = self._parse_summary_content(summary_content, processed_results)
-            
-            state['integrated_summary'] = comprehensive_summary
-            state['summary_completed'] = True
-            state['summary_error'] = None
-            
-            workflow_logger.log_info("综合总结生成完成", "summary_generator")
-            workflow_logger.log_node_end("summary_generator", {"completed": True})
-            
-        except Exception as e:
-            state['summary_completed'] = False
-            state['summary_error'] = str(e)
-            workflow_logger.log_error(f"综合总结异常: {str(e)}", "summary_generator")
-            workflow_logger.log_node_end("summary_generator", {"error": str(e)})
-        
-        return state
-    
-    def _build_summary_prompt(self, processed_results: Dict[str, Any], topic: str) -> str:
-        """构建汇总提示词"""
-        prompt_parts = [
-            f"请对以下关于'{topic}'的搜索结果进行综合分析和总结：",
-            f"",
-            f"总结果数：{processed_results.get('total_results', 0)}",
-            f"去重后结果数：{processed_results.get('unique_results', 0)}",
-            f"",
-            f"按方向分类的结果："
-        ]
-        
-        categorized_results = processed_results.get('categorized_results', {})
-        for direction, results in categorized_results.items():
-            prompt_parts.append(f"\n{direction}方向：")
-            for i, result in enumerate(results[:3], 1):  # 只取前3个结果
-                prompt_parts.append(f"  {i}. {result.query}")
-                if hasattr(result, 'summaries') and result.summaries:
-                    prompt_parts.append(f"     总结：{result.summaries[0][:200]}...")
-        
-        prompt_parts.extend([
-            f"",
-            f"请按照以下格式生成综合总结：",
-            f"1. 执行摘要（200-300字）",
-            f"2. 按方向分类的详细分析",
-            f"3. 关键洞察和发现（5-10个）",
-            f"4. 跨方向关联性发现",
-            f"5. 建议和后续行动"
-        ])
-        
-        return "\n".join(prompt_parts)
-    
-    def _get_system_prompt(self) -> str:
-        """获取系统提示词"""
-        return """你是一个专业的汇总者智能体，负责对多个问题的搜索结果进行综合总结。
-
-你的任务：
-1. 分析所有问题的搜索结果
-2. 识别关键信息和洞察
-3. 生成结构化的综合报告
-4. 提取跨问题的关联性发现
-5. 提供实用的建议和后续行动
-
-要求：
-- 总结要准确、全面、有层次
-- 关键洞察要具体、可操作
-- 语言要专业、简洁
-- 结构要清晰、逻辑性强"""
-    
-    def _parse_summary_content(self, content: str, processed_results: Dict[str, Any]) -> Dict[str, Any]:
-        """解析总结内容"""
-        # 简单的解析实现
-        lines = content.split('\n')
-        executive_summary = ""
-        detailed_analysis = {}
-        key_insights = []
-        cross_cutting_findings = []
-        recommendations = []
-        
-        current_section = None
-        current_content = []
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-                
-            if "执行摘要" in line or "摘要" in line:
-                current_section = "executive_summary"
-                current_content = []
-            elif "详细分析" in line or "分析" in line:
-                current_section = "detailed_analysis"
-                current_content = []
-            elif "关键洞察" in line or "洞察" in line:
-                current_section = "key_insights"
-                current_content = []
-            elif "关联性" in line or "关联" in line:
-                current_section = "cross_cutting"
-                current_content = []
-            elif "建议" in line or "后续行动" in line:
-                current_section = "recommendations"
-                current_content = []
-            else:
-                if current_section:
-                    current_content.append(line)
-        
-        # 处理各节内容
-        if current_section == "executive_summary":
-            executive_summary = "\n".join(current_content)
-        elif current_section == "key_insights":
-            key_insights = [item.strip() for item in current_content if item.strip()]
-        elif current_section == "cross_cutting":
-            cross_cutting_findings = [item.strip() for item in current_content if item.strip()]
-        elif current_section == "recommendations":
-            recommendations = [item.strip() for item in current_content if item.strip()]
-        
-        return {
-            "executive_summary": executive_summary,
-            "detailed_analysis": detailed_analysis,
-            "key_insights": key_insights,
-            "cross_cutting_findings": cross_cutting_findings,
-            "recommendations": recommendations,
-            "confidence_scores": {},
-            "generated_at": datetime.now().isoformat()
-        }
-    
-    def _report_generation_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
-        """报告生成节点"""
-        workflow_logger.log_node_start("report_generation", state)
-        
-        try:
-            # 构建最终报告
-            final_report = {
-                "topic": state['topic'],
-                "questions": [q.question for q in state.get('questions', [])],
-                "search_results": state.get('search_results', []),
-                "processed_results": state.get('processed_results', {}),
-                "comprehensive_summary": state.get('integrated_summary', {}),
-                "search_rounds": state.get('search_rounds', []),
-                "workflow_id": state.get('workflow_id', 'unknown'),
-                "execution_stats": {
-                    "total_time": (datetime.now() - state['start_time']).total_seconds(),
-                    "questions_generated": len(state.get('questions', [])),
-                    "searches_completed": len(state.get('search_results', [])),
-                    "search_errors": len(state.get('search_errors', [])),
-                    "success_rate": len(state.get('search_results', [])) / max(len(state.get('questions', [])), 1)
-                },
-                "generated_at": datetime.now().isoformat()
-            }
-            
-            state['final_report'] = final_report
-            state['report_generated'] = True
-            state['status'] = "completed"
-            state['end_time'] = datetime.now()
-            
-            # 保存JSON格式结果
-            self.storage.save(final_report, "results", f"integrated_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-            
-            # 生成邮件格式报告（保持向后兼容）
-            email_content = self.email_formatter.format_workflow_result(final_report)
-            email_filepath = self.email_formatter.save_email_to_file(
-                email_content, 
-                f"email_report_{state.get('workflow_id', 'unknown')}.txt"
-            )
-            
-            # 生成子问题报告
-            batch_id = state.get('workflow_id', 'unknown').replace('integrated_', '')
-            sub_question_reports = []
-            sub_question_filepaths = []
-            
+            question_directions = state.get('question_directions', [])
             search_rounds = state.get('search_rounds', [])
-            questions = state.get('questions', [])
             
-            # 为每个子问题生成独立报告
-            for i, question in enumerate(questions):
-                question_text = question.question if hasattr(question, 'question') else str(question)
-                
-                # 找到对应的搜索轮次
-                corresponding_round = None
-                for round_record in search_rounds:
-                    if hasattr(round_record, 'question') and round_record.question == question_text:
-                        corresponding_round = round_record
-                        break
-                
-                if corresponding_round:
-                    # 生成子问题报告
-                    sub_report = self.email_formatter.format_sub_question_report(
-                        question_text, corresponding_round, batch_id
-                    )
-                    sub_filepath = self.email_formatter.save_sub_question_report(
-                        sub_report, i + 1, batch_id
-                    )
-                    
-                    sub_question_reports.append(sub_report)
-                    sub_question_filepaths.append(sub_filepath)
-                    
-                    workflow_logger.log_info(f"生成子问题报告 {i+1}: {sub_filepath}", "report_generation")
+            workflow_logger.log_info(f"开始对{len(question_directions)}个方向进行评分")
             
-            # 生成汇总报告
-            summary_report = self.email_formatter.format_summary_report(final_report)
-            summary_filepath = self.email_formatter.save_summary_report(summary_report, batch_id)
+            # 使用方向评分器进行评分
+            direction_scores = self.direction_evaluator.evaluate_directions(question_directions, search_rounds)
             
-            # 生成简洁过程报告（保持向后兼容）
-            simple_report = self.email_formatter.format_simple_report(final_report)
-            simple_report_filepath = self.email_formatter.save_simple_report_to_file(
-                simple_report,
-                f"simple_report_{state.get('workflow_id', 'unknown')}.txt"
-            )
+            # 选择最佳方向
+            best_direction = self.direction_evaluator.select_best_direction(direction_scores)
             
-            # 将报告信息添加到最终报告中
-            final_report['email_content'] = email_content
-            final_report['email_filepath'] = email_filepath
-            final_report['simple_report'] = simple_report
-            final_report['simple_report_filepath'] = simple_report_filepath
-            final_report['sub_question_reports'] = sub_question_reports
-            final_report['sub_question_filepaths'] = sub_question_filepaths
-            final_report['summary_report'] = summary_report
-            final_report['summary_filepath'] = summary_filepath
-            final_report['total_sub_questions'] = len(sub_question_reports)
+            state['direction_scores'] = direction_scores
+            state['best_direction'] = best_direction
+            state['scoring_completed'] = True
+            state['scoring_error'] = None
             
-            workflow_logger.log_info(f"报告生成完成：", "report_generation")
-            workflow_logger.log_info(f"  - 邮件报告：{email_filepath}", "report_generation")
-            workflow_logger.log_info(f"  - 汇总报告：{summary_filepath}", "report_generation")
-            workflow_logger.log_info(f"  - 子问题报告：{len(sub_question_filepaths)}个", "report_generation")
-            workflow_logger.log_info(f"  - 简洁报告：{simple_report_filepath}", "report_generation")
-            
-            # 发送邮件
-            workflow_logger.log_info("开始发送邮件...", "report_generation")
-            email_result = self.email_sender.send_workflow_report(final_report)
-            
-            if email_result.get("status") == "success":
-                workflow_logger.log_info(f"邮件发送成功：{email_result.get('message_id', 'unknown')}", "report_generation")
-                final_report['email_sent'] = True
-                final_report['email_message_id'] = email_result.get('message_id')
-            elif email_result.get("status") == "skipped":
-                workflow_logger.log_warning("邮件发送跳过：配置不完整", "report_generation")
-                final_report['email_sent'] = False
-                final_report['email_skip_reason'] = email_result.get('reason')
-            else:
-                workflow_logger.log_error(f"邮件发送失败：{email_result.get('error', 'unknown')}", "report_generation")
-                final_report['email_sent'] = False
-                final_report['email_error'] = email_result.get('error')
-            
-            workflow_logger.log_node_end("report_generation", {
-                "completed": True, 
-                "email_file": email_filepath,
-                "summary_file": summary_filepath,
-                "sub_question_count": len(sub_question_filepaths),
-                "simple_file": simple_report_filepath,
-                "email_sent": final_report.get('email_sent', False)
+            workflow_logger.log_info(f"方向评分完成，最佳方向：{best_direction}", "direction_scoring")
+            workflow_logger.log_node_end("direction_scoring", {
+                "completed": True,
+                "best_direction": best_direction,
+                "scores_count": len(direction_scores)
             })
             
         except Exception as e:
-            state['report_generated'] = False
-            state['status'] = "error"
-            state['error'] = str(e)
-            workflow_logger.log_error(f"报告生成异常: {str(e)}", "report_generation")
-            workflow_logger.log_node_end("report_generation", {"error": str(e)})
+            state['scoring_completed'] = False
+            state['scoring_error'] = str(e)
+            workflow_logger.log_error(f"方向评分异常: {str(e)}", "direction_scoring")
+            workflow_logger.log_node_end("direction_scoring", {"error": str(e)})
         
         return state
     
-    def _should_continue_after_questions(self, state: IntegratedWorkflowState) -> str:
+    def _report_optimization_node(self, state: OptimizedWorkflowState) -> OptimizedWorkflowState:
+        """报告优化节点"""
+        workflow_logger.log_node_start("report_optimization", state)
+        
+        if not state.get('scoring_completed', False):
+            state['report_optimization_completed'] = False
+            state['report_optimization_error'] = "评分未完成"
+            workflow_logger.log_error("评分未完成，跳过报告优化", "report_optimization")
+            return state
+        
+        try:
+            topic = state.get('topic', '')
+            direction_scores = state.get('direction_scores', [])
+            question_directions = state.get('question_directions', [])
+            search_rounds = state.get('search_rounds', [])
+            
+            workflow_logger.log_info("开始生成优化报告")
+            
+            # 使用报告优化器生成优化报告
+            optimized_report = self.report_optimizer.generate_optimized_report(
+                topic, direction_scores, question_directions, search_rounds
+            )
+            
+            state['optimized_report'] = optimized_report
+            state['report_optimization_completed'] = True
+            state['report_optimization_error'] = None
+            
+            workflow_logger.log_info(f"报告优化完成，最佳方向：{optimized_report.best_direction}", "report_optimization")
+            workflow_logger.log_node_end("report_optimization", {
+                "completed": True,
+                "best_direction": optimized_report.best_direction,
+                "best_score": optimized_report.best_direction_score
+            })
+            
+        except Exception as e:
+            state['report_optimization_completed'] = False
+            state['report_optimization_error'] = str(e)
+            workflow_logger.log_error(f"报告优化异常: {str(e)}", "report_optimization")
+            workflow_logger.log_node_end("report_optimization", {"error": str(e)})
+        
+        return state
+    
+    def _email_generation_node(self, state: OptimizedWorkflowState) -> OptimizedWorkflowState:
+        """邮件生成节点"""
+        workflow_logger.log_node_start("email_generation", state)
+        
+        try:
+            optimized_report = state.get('optimized_report')
+            if not optimized_report:
+                state['email_sent'] = False
+                state['final_email'] = "报告优化未完成，无法生成邮件"
+                workflow_logger.log_error("报告优化未完成，无法生成邮件", "email_generation")
+                return state
+            
+            # 生成优化邮件内容
+            email_content = self.email_formatter.format_optimized_report(optimized_report)
+            
+            # 保存邮件到文件
+            email_filepath = self.email_formatter.save_email_to_file(
+                email_content, 
+                f"optimized_email_{state.get('workflow_id', 'unknown')}.txt"
+            )
+            
+            # 发送邮件
+            workflow_logger.log_info("开始发送优化邮件...", "email_generation")
+            email_result = self.email_sender.send_workflow_report({
+                'topic': optimized_report.topic,
+                'email_content': email_content,
+                'optimized_report': optimized_report.dict()
+            })
+            
+            if email_result.get("status") == "success":
+                workflow_logger.log_info(f"邮件发送成功：{email_result.get('message_id', 'unknown')}", "email_generation")
+                state['email_sent'] = True
+            elif email_result.get("status") == "skipped":
+                workflow_logger.log_warning("邮件发送跳过：配置不完整", "email_generation")
+                state['email_sent'] = False
+            else:
+                workflow_logger.log_error(f"邮件发送失败：{email_result.get('error', 'unknown')}", "email_generation")
+                state['email_sent'] = False
+            
+            state['final_email'] = email_content
+            state['status'] = "completed"
+            state['end_time'] = datetime.now()
+            
+            workflow_logger.log_info(f"邮件生成完成：{email_filepath}", "email_generation")
+            workflow_logger.log_node_end("email_generation", {
+                "completed": True,
+                "email_file": email_filepath,
+                "email_sent": state['email_sent']
+            })
+            
+        except Exception as e:
+            state['email_sent'] = False
+            state['status'] = "error"
+            state['error'] = str(e)
+            workflow_logger.log_error(f"邮件生成异常: {str(e)}", "email_generation")
+            workflow_logger.log_node_end("email_generation", {"error": str(e)})
+        
+        return state
+    
+    def _should_continue_after_questions(self, state: OptimizedWorkflowState) -> str:
         """问题生成后是否继续"""
         if state.get('question_generation_completed', False):
             return "continue"
         else:
             return "error"
     
-    def _should_continue_after_search(self, state: IntegratedWorkflowState) -> str:
+    def _should_continue_after_search(self, state: OptimizedWorkflowState) -> str:
         """搜索后是否继续"""
         if state.get('search_completed', False):
             return "continue"
         else:
             return "error"
     
-    def _should_continue_after_processing(self, state: IntegratedWorkflowState) -> str:
-        """结果处理后是否继续"""
-        if state.get('result_processing_completed', False):
+    def _should_continue_after_scoring(self, state: OptimizedWorkflowState) -> str:
+        """评分后是否继续"""
+        if state.get('scoring_completed', False):
             return "continue"
         else:
             return "error"
     
-    def _should_continue_after_summary(self, state: IntegratedWorkflowState) -> str:
-        """总结后是否继续"""
-        if state.get('summary_completed', False):
+    def _should_continue_after_optimization(self, state: OptimizedWorkflowState) -> str:
+        """优化后是否继续"""
+        if state.get('report_optimization_completed', False):
             return "continue"
         else:
             return "error"
@@ -862,7 +643,7 @@ class IntegratedWorkflowController:
             workflow_id = f"integrated_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             
             # 初始化状态
-            initial_state: IntegratedWorkflowState = {
+            initial_state: OptimizedWorkflowState = {
                 "topic": topic,
                 "status": "running",
                 "error": None,
@@ -874,19 +655,18 @@ class IntegratedWorkflowController:
                 "question_generation_error": None,
                 "search_tasks": [],
                 "search_results": [],
-                "search_progress": {},
+                "search_rounds": [],
                 "search_completed": False,
                 "search_errors": [],
-                "processed_results": None,
-                "result_processing_completed": False,
-                "result_processing_error": None,
-                "integrated_summary": None,
-                "summary_completed": False,
-                "summary_error": None,
-                "final_report": None,
-                "report_generated": False,
-                "workflow_record": None,
-                "search_rounds": [],
+                "direction_scores": [],
+                "best_direction": None,
+                "scoring_completed": False,
+                "scoring_error": None,
+                "optimized_report": None,
+                "report_optimization_completed": False,
+                "report_optimization_error": None,
+                "final_email": None,
+                "email_sent": False,
                 "workflow_id": workflow_id
             }
             
@@ -894,11 +674,28 @@ class IntegratedWorkflowController:
             final_state = self.workflow.invoke(initial_state)
             
             # 构建最终结果
-            result_dict = final_state.get('final_report', {})
-            result_dict['status'] = final_state.get('status', 'unknown')
-            result_dict['error'] = final_state.get('error')
+            result_dict = {
+                "topic": final_state.get('topic', topic),
+                "status": final_state.get('status', 'unknown'),
+                "error": final_state.get('error'),
+                "workflow_id": final_state.get('workflow_id', workflow_id),
+                "optimized_report": final_state.get('optimized_report'),
+                "direction_scores": final_state.get('direction_scores', []),
+                "best_direction": final_state.get('best_direction'),
+                "final_email": final_state.get('final_email'),
+                "email_sent": final_state.get('email_sent', False),
+                "execution_stats": {
+                    "total_time": self._calculate_total_time(final_state),
+                    "questions_generated": len(final_state.get('questions', [])),
+                    "searches_completed": len(final_state.get('search_results', [])),
+                    "search_errors": len(final_state.get('search_errors', [])),
+                    "directions_scored": len(final_state.get('direction_scores', [])),
+                    "success_rate": len(final_state.get('search_results', [])) / max(len(final_state.get('questions', [])), 1)
+                },
+                "generated_at": datetime.now().isoformat()
+            }
             
-            workflow_logger.log_workflow_end("IntegratedWorkflow", final_state.get('status', 'unknown'), result_dict)
+            workflow_logger.log_workflow_end("OptimizedIntegratedWorkflow", final_state.get('status', 'unknown'), result_dict)
             
             return result_dict
             
@@ -911,3 +708,18 @@ class IntegratedWorkflowController:
             }
             workflow_logger.log_error(f"集成工作流执行失败: {str(e)}", "process_topic")
             return error_result
+    
+    def _calculate_total_time(self, final_state: OptimizedWorkflowState) -> float:
+        """计算总执行时间"""
+        try:
+            start_time = final_state.get('start_time')
+            end_time = final_state.get('end_time')
+            
+            if start_time and end_time:
+                return (end_time - start_time).total_seconds()
+            elif start_time:
+                return (datetime.now() - start_time).total_seconds()
+            else:
+                return 0.0
+        except Exception:
+            return 0.0

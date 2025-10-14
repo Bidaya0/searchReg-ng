@@ -8,12 +8,13 @@ import sys
 
 def main():
     # 解析命令行参数
-    parser = argparse.ArgumentParser(description="基于LangGraph的智能搜索与讨论系统")
+    parser = argparse.ArgumentParser(description="基于LangGraph的智能搜索与讨论系统 - 支持优化工作流模式")
     parser.add_argument("--topic", type=str, help="要搜索的主题")
     parser.add_argument("--max_results", type=int, default=20, help="最大结果数量")
     parser.add_argument("--interactive", action="store_true", help="交互式模式，从标准输入获取主题")
     parser.add_argument("--questions", action="store_true", help="启用问题生成模式：基于5个方向生成25个问题")
     parser.add_argument("--integrated", action="store_true", help="启用集成工作流模式：问题生成+搜索+汇总")
+    parser.add_argument("--optimized", action="store_true", help="启用优化工作流模式：问题生成+搜索+评分+优化报告")
     args = parser.parse_args()
     
     try:
@@ -43,21 +44,68 @@ def main():
         print(f"错误：系统初始化失败 - {str(e)}")
         sys.exit(1)
     
-    # 获取主题
+    # 获取主题和模式
     try:
         if args.interactive:
-            print("请输入要搜索的主题（输入完成后按回车）：")
+            # 交互式模式：显示菜单让用户选择
+            print("\n" + "="*60)
+            print("🚀 智能搜索与讨论系统")
+            print("="*60)
+            print("请选择运行模式：")
+            print("1. 基础搜索模式 - 对单个主题进行深度搜索")
+            print("2. 问题生成模式 - 基于5个方向生成25个问题")
+            print("3. 集成工作流模式 - 问题生成+搜索+汇总")
+            print("4. 优化工作流模式 - 问题生成+搜索+评分+优化报告 (推荐)")
+            print("5. 退出")
+            print("-"*60)
+            
+            while True:
+                try:
+                    choice = input("请输入选择 (1-5): ").strip()
+                    if choice == "1":
+                        mode = "search"
+                        break
+                    elif choice == "2":
+                        mode = "questions"
+                        break
+                    elif choice == "3":
+                        mode = "integrated"
+                        break
+                    elif choice == "4":
+                        mode = "optimized"
+                        break
+                    elif choice == "5":
+                        print("感谢使用，再见！")
+                        sys.exit(0)
+                    else:
+                        print("无效选择，请输入 1-5")
+                except KeyboardInterrupt:
+                    print("\n操作已取消")
+                    sys.exit(0)
+            
+            print(f"\n已选择模式: {mode}")
+            print("请输入要处理的主题（输入完成后按回车）：")
             topic = input().strip()
             if not topic:
                 print("错误：主题不能为空")
                 sys.exit(1)
         else:
+            # 命令行模式：根据参数确定模式
+            if args.optimized:
+                mode = "optimized"
+            elif args.integrated:
+                mode = "integrated"
+            elif args.questions:
+                mode = "questions"
+            else:
+                mode = "search"
+            
             if not args.topic:
                 print("错误：请提供要搜索的主题（使用 --topic 参数或 --interactive 模式）")
                 sys.exit(1)
             topic = args.topic
         
-        workflow_logger.log_info(f"开始处理主题: {topic}")
+        workflow_logger.log_info(f"开始处理主题: {topic}, 模式: {mode}")
         
     except KeyboardInterrupt:
         workflow_logger.log_info("用户中断操作")
@@ -68,9 +116,84 @@ def main():
         print(f"错误：获取主题失败 - {str(e)}")
         sys.exit(1)
     
-    # 分支：问题生成模式 or 搜索模式 or 集成工作流模式
+    # 分支：根据模式执行相应的处理
     try:
-        if args.integrated:
+        if mode == "optimized":
+            print(f"正在为主题 '{topic}' 执行优化工作流...")
+            workflow_logger.log_info("启动优化工作流模式")
+            result = integrated_system.process_topic(topic)
+            
+            if result.get("status") == "completed":
+                print(f"\n=== 优化工作流结果 ===")
+                print(f"主题：{result['topic']}")
+                print(f"工作流ID：{result.get('workflow_id', 'N/A')}")
+                print(f"最佳方向：{result.get('best_direction', 'N/A')}")
+                print(f"邮件发送状态：{'✅ 成功' if result.get('email_sent', False) else '❌ 失败'}")
+                
+                # 显示方向评分
+                if result.get('direction_scores'):
+                    print(f"\n=== 方向评分结果 ===")
+                    for i, score in enumerate(result['direction_scores'], 1):
+                        print(f"{i}. {score.direction}: {score.overall_score:.1f}分")
+                        print(f"   - 搜索质量: {score.search_quality_score:.1f}分")
+                        print(f"   - 内容深度: {score.content_depth_score:.1f}分")
+                        print(f"   - 技术指标: {score.technical_score:.1f}分")
+                
+                # 显示优化报告
+                if result.get('optimized_report'):
+                    report = result['optimized_report']
+                    print(f"\n=== 优化报告概览 ===")
+                    print(f"最佳方向：{report.best_direction} ({report.best_direction_score:.1f}分)")
+                    print(f"执行摘要长度：{len(report.executive_summary)}字符")
+                    print(f"详细分析问题数：{len(report.detailed_analysis.get('questions_analysis', []))}")
+                    print(f"简要分析方向数：{len(report.brief_analyses)}")
+                    print(f"综合建议数：{len(report.comprehensive_recommendations)}")
+                    
+                    # 显示执行摘要预览
+                    print(f"\n=== 执行摘要预览 ===")
+                    summary_preview = report.executive_summary[:300] + "..." if len(report.executive_summary) > 300 else report.executive_summary
+                    print(summary_preview)
+                    
+                    # 显示最佳方向的关键发现
+                    if report.detailed_analysis.get('key_findings'):
+                        print(f"\n=== 最佳方向关键发现 ===")
+                        for i, finding in enumerate(report.detailed_analysis['key_findings'][:5], 1):
+                            print(f"{i}. {finding}")
+                    
+                    # 显示综合建议
+                    if report.comprehensive_recommendations:
+                        print(f"\n=== 综合建议 ===")
+                        for i, rec in enumerate(report.comprehensive_recommendations[:5], 1):
+                            print(f"{i}. {rec}")
+                
+                # 显示执行统计
+                if result.get('execution_stats'):
+                    stats = result['execution_stats']
+                    print(f"\n=== 执行统计 ===")
+                    print(f"总处理时间：{stats.get('total_time', 'N/A')}秒")
+                    print(f"问题生成数：{stats.get('questions_generated', 0)}")
+                    print(f"搜索完成数：{stats.get('searches_completed', 0)}")
+                    print(f"搜索错误数：{stats.get('search_errors', 0)}")
+                    print(f"评分方向数：{stats.get('directions_scored', 0)}")
+                    print(f"成功率：{stats.get('success_rate', 0):.2%}")
+                
+                # 显示邮件内容预览
+                if result.get('final_email'):
+                    print(f"\n=== 邮件内容预览 ===")
+                    email_preview = result['final_email'][:500]
+                    print(f"{email_preview}...")
+                    print(f"\n📧 完整邮件内容已生成，邮件发送状态：{'✅ 成功' if result.get('email_sent', False) else '❌ 失败'}")
+                
+                print(f"\n🎉 优化工作流完成！")
+                print(f"📋 系统特点：")
+                print(f"   - 智能评分：基于搜索质量、内容深度、技术指标的综合评分")
+                print(f"   - 重点突出：详细展示最佳方向，简略展示其他方向")
+                print(f"   - 结构优化：降低用户阅读负担，提高信息获取效率")
+                print(f"   - 统一报告：生成一份综合邮件，包含所有重要信息")
+            else:
+                print(f"优化工作流失败：{result.get('error', '未知错误')}")
+                workflow_logger.log_error(f"优化工作流失败: {result.get('error', '未知错误')}")
+        elif mode == "integrated":
             print(f"正在为主题 '{topic}' 执行集成工作流...")
             workflow_logger.log_info("启动集成工作流模式")
             result = integrated_system.process_topic(topic)
@@ -123,7 +246,7 @@ def main():
             else:
                 print(f"集成工作流失败：{result.get('error', '未知错误')}")
                 workflow_logger.log_error(f"集成工作流失败: {result.get('error', '未知错误')}")
-        elif args.questions:
+        elif mode == "questions":
             print(f"正在为主题 '{topic}' 生成问题...")
             workflow_logger.log_info("启动问题生成模式")
             result = question_system.generate_questions(topic)
@@ -150,7 +273,7 @@ def main():
                 workflow_logger.log_error(f"问题生成失败: {error_msg}")
                 if error_details:
                     workflow_logger.log_error(f"详细错误信息:\n{error_details}")
-        else:
+        else:  # mode == "search"
             print(f"正在处理主题 '{topic}'...")
             workflow_logger.log_info("启动搜索模式")
             result = search_system.process_topic(topic)
