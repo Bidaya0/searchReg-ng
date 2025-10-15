@@ -27,6 +27,12 @@ from logger import workflow_logger
 from question_workflow import QuestionWorkflow
 from search_workflow import SearchWorkflow
 
+# 导入User Story 4的新组件
+from question_tree_modeler import QuestionTreeModeler
+from email_content_scorer import EmailContentScorer
+from best_direction_selector import BestDirectionSelector
+from optimized_report_generator import OptimizedReportGenerator, ReportFormatter
+
 
 class IntegratedWorkflowState(TypedDict):
     """集成工作流状态类型定义"""
@@ -55,6 +61,27 @@ class IntegratedWorkflowState(TypedDict):
     result_processing_completed: bool
     result_processing_error: Optional[str]
     
+    # User Story 4 新阶段
+    # 树状建模阶段
+    question_tree: Optional[Dict[str, Any]]
+    tree_modeling_completed: bool
+    tree_modeling_error: Optional[str]
+    
+    # 内容评分阶段
+    scoring_result: Optional[Dict[str, Any]]
+    content_scoring_completed: bool
+    content_scoring_error: Optional[str]
+    
+    # 方向筛选阶段
+    selection_result: Optional[Dict[str, Any]]
+    direction_selection_completed: bool
+    direction_selection_error: Optional[str]
+    
+    # 报告优化阶段
+    optimized_report: Optional[Dict[str, Any]]
+    report_optimization_completed: bool
+    report_optimization_error: Optional[str]
+    
     # 汇总阶段
     integrated_summary: Optional[Dict[str, Any]]
     summary_completed: bool
@@ -80,6 +107,13 @@ class IntegratedWorkflowController:
         # 初始化现有工作流
         self.question_workflow = QuestionWorkflow(config)
         self.search_workflow = SearchWorkflow(config)
+        
+        # 初始化User Story 4的新组件
+        self.question_tree_modeler = QuestionTreeModeler(config)
+        self.email_content_scorer = EmailContentScorer(config)
+        self.best_direction_selector = BestDirectionSelector(config)
+        self.optimized_report_generator = OptimizedReportGenerator(config)
+        self.report_formatter = ReportFormatter(config)
         
         # 初始化LLM（用于汇总）
         self.llm = ChatOpenAI(
@@ -127,6 +161,10 @@ class IntegratedWorkflowController:
             workflow.add_node("question_generation", self._question_generation_node)
             workflow.add_node("parallel_search", self._parallel_search_node)
             workflow.add_node("result_processing", self._result_processing_node)
+            workflow.add_node("tree_modeling", self._tree_modeling_node)
+            workflow.add_node("content_scoring", self._content_scoring_node)
+            workflow.add_node("direction_selection", self._direction_selection_node)
+            workflow.add_node("report_optimization", self._report_optimization_node)
             workflow.add_node("summary_generator", self._integrated_summary_node)
             workflow.add_node("report_generation", self._report_generation_node)
             workflow_logger.log_info("节点添加完成")
@@ -144,7 +182,11 @@ class IntegratedWorkflowController:
             workflow_logger.log_info("开始添加边")
             workflow.add_edge("question_generation", "parallel_search")
             workflow.add_edge("parallel_search", "result_processing")
-            workflow.add_edge("result_processing", "summary_generator")
+            workflow.add_edge("result_processing", "tree_modeling")
+            workflow.add_edge("tree_modeling", "content_scoring")
+            workflow.add_edge("content_scoring", "direction_selection")
+            workflow.add_edge("direction_selection", "report_optimization")
+            workflow.add_edge("report_optimization", "summary_generator")
             workflow.add_edge("summary_generator", "report_generation")
             workflow_logger.log_info("边添加完成")
         except Exception as e:
@@ -184,6 +226,42 @@ class IntegratedWorkflowController:
             workflow.add_conditional_edges(
                 "result_processing",
                 self._should_continue_after_processing,
+                {
+                    "continue": "tree_modeling",
+                    "error": END
+                }
+            )
+            
+            workflow.add_conditional_edges(
+                "tree_modeling",
+                self._should_continue_after_tree_modeling,
+                {
+                    "continue": "content_scoring",
+                    "error": END
+                }
+            )
+            
+            workflow.add_conditional_edges(
+                "content_scoring",
+                self._should_continue_after_content_scoring,
+                {
+                    "continue": "direction_selection",
+                    "error": END
+                }
+            )
+            
+            workflow.add_conditional_edges(
+                "direction_selection",
+                self._should_continue_after_direction_selection,
+                {
+                    "continue": "report_optimization",
+                    "error": END
+                }
+            )
+            
+            workflow.add_conditional_edges(
+                "report_optimization",
+                self._should_continue_after_report_optimization,
                 {
                     "continue": "summary_generator",
                     "error": END
@@ -722,8 +800,20 @@ class IntegratedWorkflowController:
             # 保存JSON格式结果
             self.storage.save(final_report, "results", f"integrated_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
             
-            # 生成邮件格式报告（保持向后兼容）
-            email_content = self.email_formatter.format_workflow_result(final_report)
+            # 生成邮件格式报告
+            workflow_logger.log_info("开始生成邮件内容...", "report_generation")
+            
+            # 检查是否有优化报告
+            optimized_report = state.get('optimized_report')
+            if optimized_report and optimized_report.get("status") == "completed":
+                # 使用优化后的报告内容
+                workflow_logger.log_info("使用优化后的报告内容", "report_generation")
+                email_content = self.report_formatter.format_optimized_report(optimized_report)
+            else:
+                # 使用原有的报告格式（保持向后兼容）
+                workflow_logger.log_info("使用原有报告格式", "report_generation")
+                email_content = self.email_formatter.format_workflow_result(final_report)
+            
             email_filepath = self.email_formatter.save_email_to_file(
                 email_content, 
                 f"email_report_{state.get('workflow_id', 'unknown')}.txt"
@@ -825,6 +915,163 @@ class IntegratedWorkflowController:
         
         return state
     
+    def _tree_modeling_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
+        """树状建模节点"""
+        try:
+            workflow_logger.log_node_start("tree_modeling", state)
+            
+            # 获取搜索记录
+            search_rounds = state.get('search_rounds', [])
+            topic = state.get('topic', 'unknown')
+            
+            if not search_rounds:
+                raise ValueError("没有搜索记录可用于树状建模")
+            
+            # 构建问题树状结构
+            tree_result = self.question_tree_modeler.build_question_tree(search_rounds, topic)
+            
+            if tree_result.get("status") == "completed":
+                state['question_tree'] = tree_result
+                state['tree_modeling_completed'] = True
+                state['tree_modeling_error'] = None
+                workflow_logger.log_info(f"树状建模完成，共{tree_result.get('tree', {}).get('total_nodes', 0)}个节点")
+            else:
+                state['tree_modeling_completed'] = False
+                state['tree_modeling_error'] = tree_result.get("error", "未知错误")
+                workflow_logger.log_error(f"树状建模失败: {state['tree_modeling_error']}")
+            
+            workflow_logger.log_node_end("tree_modeling", {
+                "completed": state['tree_modeling_completed'],
+                "error": state['tree_modeling_error']
+            })
+            
+        except Exception as e:
+            state['tree_modeling_completed'] = False
+            state['tree_modeling_error'] = str(e)
+            workflow_logger.log_error(f"树状建模异常: {str(e)}", "tree_modeling")
+            workflow_logger.log_node_end("tree_modeling", {"error": str(e)})
+        
+        return state
+    
+    def _content_scoring_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
+        """内容评分节点"""
+        try:
+            workflow_logger.log_node_start("content_scoring", state)
+            
+            # 获取搜索记录
+            search_rounds = state.get('search_rounds', [])
+            topic = state.get('topic', 'unknown')
+            
+            if not search_rounds:
+                raise ValueError("没有搜索记录可用于内容评分")
+            
+            # 对各个方向进行评分
+            scoring_result = self.email_content_scorer.score_directions(search_rounds, topic)
+            
+            if scoring_result.get("status") == "completed":
+                state['scoring_result'] = scoring_result
+                state['content_scoring_completed'] = True
+                state['content_scoring_error'] = None
+                workflow_logger.log_info(f"内容评分完成，共{scoring_result.get('scoring_result', {}).get('scored_directions', 0)}个方向")
+            else:
+                state['content_scoring_completed'] = False
+                state['content_scoring_error'] = scoring_result.get("error", "未知错误")
+                workflow_logger.log_error(f"内容评分失败: {state['content_scoring_error']}")
+            
+            workflow_logger.log_node_end("content_scoring", {
+                "completed": state['content_scoring_completed'],
+                "error": state['content_scoring_error']
+            })
+            
+        except Exception as e:
+            state['content_scoring_completed'] = False
+            state['content_scoring_error'] = str(e)
+            workflow_logger.log_error(f"内容评分异常: {str(e)}", "content_scoring")
+            workflow_logger.log_node_end("content_scoring", {"error": str(e)})
+        
+        return state
+    
+    def _direction_selection_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
+        """方向筛选节点"""
+        try:
+            workflow_logger.log_node_start("direction_selection", state)
+            
+            # 获取评分结果
+            scoring_result = state.get('scoring_result')
+            
+            if not scoring_result:
+                raise ValueError("没有评分结果可用于方向筛选")
+            
+            # 筛选最佳方向
+            selection_result = self.best_direction_selector.select_best_directions(scoring_result)
+            
+            if selection_result.get("status") == "completed":
+                state['selection_result'] = selection_result
+                state['direction_selection_completed'] = True
+                state['direction_selection_error'] = None
+                best_direction = selection_result.get("selection_result", {}).get("best_direction", "unknown")
+                workflow_logger.log_info(f"方向筛选完成，最佳方向: {best_direction}")
+            else:
+                state['direction_selection_completed'] = False
+                state['direction_selection_error'] = selection_result.get("error", "未知错误")
+                workflow_logger.log_error(f"方向筛选失败: {state['direction_selection_error']}")
+            
+            workflow_logger.log_node_end("direction_selection", {
+                "completed": state['direction_selection_completed'],
+                "error": state['direction_selection_error']
+            })
+            
+        except Exception as e:
+            state['direction_selection_completed'] = False
+            state['direction_selection_error'] = str(e)
+            workflow_logger.log_error(f"方向筛选异常: {str(e)}", "direction_selection")
+            workflow_logger.log_node_end("direction_selection", {"error": str(e)})
+        
+        return state
+    
+    def _report_optimization_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
+        """报告优化节点"""
+        try:
+            workflow_logger.log_node_start("report_optimization", state)
+            
+            # 获取必要的数据
+            selection_result = state.get('selection_result')
+            scoring_result = state.get('scoring_result')
+            search_rounds = state.get('search_rounds', [])
+            question_tree = state.get('question_tree')
+            topic = state.get('topic', 'unknown')
+            
+            if not all([selection_result, scoring_result]):
+                raise ValueError("缺少必要的数据用于报告优化")
+            
+            # 生成优化报告
+            optimized_report = self.optimized_report_generator.generate_optimized_report(
+                selection_result, scoring_result, search_rounds, question_tree, topic
+            )
+            
+            if optimized_report.get("status") == "completed":
+                state['optimized_report'] = optimized_report
+                state['report_optimization_completed'] = True
+                state['report_optimization_error'] = None
+                workflow_logger.log_info("报告优化完成")
+            else:
+                state['report_optimization_completed'] = False
+                state['report_optimization_error'] = optimized_report.get("error", "未知错误")
+                workflow_logger.log_error(f"报告优化失败: {state['report_optimization_error']}")
+            
+            workflow_logger.log_node_end("report_optimization", {
+                "completed": state['report_optimization_completed'],
+                "error": state['report_optimization_error']
+            })
+            
+        except Exception as e:
+            state['report_optimization_completed'] = False
+            state['report_optimization_error'] = str(e)
+            workflow_logger.log_error(f"报告优化异常: {str(e)}", "report_optimization")
+            workflow_logger.log_node_end("report_optimization", {"error": str(e)})
+        
+        return state
+    
     def _should_continue_after_questions(self, state: IntegratedWorkflowState) -> str:
         """问题生成后是否继续"""
         if state.get('question_generation_completed', False):
@@ -842,6 +1089,34 @@ class IntegratedWorkflowController:
     def _should_continue_after_processing(self, state: IntegratedWorkflowState) -> str:
         """结果处理后是否继续"""
         if state.get('result_processing_completed', False):
+            return "continue"
+        else:
+            return "error"
+    
+    def _should_continue_after_tree_modeling(self, state: IntegratedWorkflowState) -> str:
+        """树状建模后是否继续"""
+        if state.get('tree_modeling_completed', False):
+            return "continue"
+        else:
+            return "error"
+    
+    def _should_continue_after_content_scoring(self, state: IntegratedWorkflowState) -> str:
+        """内容评分后是否继续"""
+        if state.get('content_scoring_completed', False):
+            return "continue"
+        else:
+            return "error"
+    
+    def _should_continue_after_direction_selection(self, state: IntegratedWorkflowState) -> str:
+        """方向筛选后是否继续"""
+        if state.get('direction_selection_completed', False):
+            return "continue"
+        else:
+            return "error"
+    
+    def _should_continue_after_report_optimization(self, state: IntegratedWorkflowState) -> str:
+        """报告优化后是否继续"""
+        if state.get('report_optimization_completed', False):
             return "continue"
         else:
             return "error"
@@ -880,6 +1155,19 @@ class IntegratedWorkflowController:
                 "processed_results": None,
                 "result_processing_completed": False,
                 "result_processing_error": None,
+                # User Story 4 新字段
+                "question_tree": None,
+                "tree_modeling_completed": False,
+                "tree_modeling_error": None,
+                "scoring_result": None,
+                "content_scoring_completed": False,
+                "content_scoring_error": None,
+                "selection_result": None,
+                "direction_selection_completed": False,
+                "direction_selection_error": None,
+                "optimized_report": None,
+                "report_optimization_completed": False,
+                "report_optimization_error": None,
                 "integrated_summary": None,
                 "summary_completed": False,
                 "summary_error": None,

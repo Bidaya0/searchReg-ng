@@ -27,5 +27,38 @@ def get_config() -> Dict[str, Any]:
             "to_email": os.getenv("TO_EMAIL"),
             "cc_email": os.getenv("CC_EMAIL"),
             "bcc_email": os.getenv("BCC_EMAIL")
+        },
+        # User Story 4 配置
+        "us4": {
+            # 树状建模配置
+            "tree_modeling": {
+                "max_tree_depth": 3,
+                "min_importance_threshold": 0.3,
+                "max_branching_factor": 10
+            },
+            # 评分系统配置
+            "scoring": {
+                "min_comprehensive_score": 60.0,
+                "min_quality_level": "中",
+                "weights": {
+                    "search_quality_weight": 0.4,
+                    "content_depth_weight": 0.4,
+                    "technical_metrics_weight": 0.2
+                }
+            },
+            # 方向筛选配置
+            "direction_selection": {
+                "max_detailed_directions": 1,
+                "max_summary_directions": 4,
+                "complementary_threshold": 0.3,
+                "enable_quality_filtering": True,
+                "enable_complementary_analysis": True
+            },
+            # 报告优化配置
+            "report_optimization": {
+                "executive_summary_length": 300,
+                "detailed_analysis_length": 800,
+                "enable_llm_generation": True
+            }
         }
     }
