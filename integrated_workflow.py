@@ -918,7 +918,7 @@ class IntegratedWorkflowController:
     def _tree_modeling_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
         """树状建模节点"""
         try:
-            workflow_logger.log_node_start("tree_modeling", state)
+            workflow_logger.log_node_start("tree_modeling")
             
             # 获取搜索记录
             search_rounds = state.get('search_rounds', [])
@@ -956,7 +956,7 @@ class IntegratedWorkflowController:
     def _content_scoring_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
         """内容评分节点"""
         try:
-            workflow_logger.log_node_start("content_scoring", state)
+            workflow_logger.log_node_start("content_scoring")
             
             # 获取搜索记录
             search_rounds = state.get('search_rounds', [])
@@ -994,7 +994,7 @@ class IntegratedWorkflowController:
     def _direction_selection_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
         """方向筛选节点"""
         try:
-            workflow_logger.log_node_start("direction_selection", state)
+            workflow_logger.log_node_start("direction_selection")
             
             # 获取评分结果
             scoring_result = state.get('scoring_result')
@@ -1032,7 +1032,7 @@ class IntegratedWorkflowController:
     def _report_optimization_node(self, state: IntegratedWorkflowState) -> IntegratedWorkflowState:
         """报告优化节点"""
         try:
-            workflow_logger.log_node_start("report_optimization", state)
+            workflow_logger.log_node_start("report_optimization")
             
             # 获取必要的数据
             selection_result = state.get('selection_result')

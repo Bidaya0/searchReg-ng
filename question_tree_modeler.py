@@ -140,11 +140,12 @@ class TreeBuilder:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.logger = workflow_logger
         
     def build_tree(self, search_results: List[SearchRoundRecord], topic: str) -> QuestionTree:
         """构建问题树状结构"""
         try:
-            workflow_logger.log_info("开始构建问题树状结构")
+            self.logger.log_info("开始构建问题树状结构")
             
             # 1. 创建根节点
             root_node = self._create_root_node(topic)
@@ -167,11 +168,11 @@ class TreeBuilder:
             # 7. 优化树结构
             optimized_tree = self._optimize_tree_structure(tree)
             
-            workflow_logger.log_info(f"问题树状结构构建完成，共{optimized_tree.total_nodes}个节点")
+            self.logger.log_info(f"问题树状结构构建完成，共{optimized_tree.total_nodes}个节点")
             return optimized_tree
             
         except Exception as e:
-            workflow_logger.log_error(f"构建问题树状结构失败: {str(e)}")
+            self.logger.log_error(f"构建问题树状结构失败: {str(e)}")
             raise
     
     def _create_root_node(self, topic: str) -> QuestionTreeNode:
@@ -366,7 +367,7 @@ class NodeAnalyzer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
     
     def analyze_node_relationships(self, tree: QuestionTree) -> List[Dict[str, Any]]:
         """分析节点关系"""
@@ -512,12 +513,12 @@ class TreeOptimizer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
     
     def optimize_tree(self, tree: QuestionTree) -> QuestionTree:
         """优化树状结构"""
         try:
-            workflow_logger.log_info("开始优化树状结构")
+            self.logger.log_info("开始优化树状结构")
             
             # 1. 节点重要性排序
             optimized_tree = self._sort_nodes_by_importance(tree)
@@ -531,11 +532,11 @@ class TreeOptimizer:
             # 4. 更新树结构信息
             optimized_tree.updated_at = datetime.now()
             
-            workflow_logger.log_info("树状结构优化完成")
+            self.logger.log_info("树状结构优化完成")
             return optimized_tree
             
         except Exception as e:
-            workflow_logger.log_error(f"优化树状结构失败: {str(e)}")
+            self.logger.log_error(f"优化树状结构失败: {str(e)}")
             return tree
     
     def _sort_nodes_by_importance(self, tree: QuestionTree) -> QuestionTree:
@@ -599,7 +600,7 @@ class TreeVisualizer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
     
     def generate_tree_diagram(self, tree: QuestionTree) -> str:
         """生成树状结构图表"""
@@ -609,7 +610,7 @@ class TreeVisualizer:
             return mermaid_code
             
         except Exception as e:
-            workflow_logger.log_error(f"生成树状结构图表失败: {str(e)}")
+            self.logger.log_error(f"生成树状结构图表失败: {str(e)}")
             return ""
     
     def _generate_mermaid_tree(self, tree: QuestionTree) -> str:
@@ -694,7 +695,7 @@ class QuestionTreeModeler:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
         
         # 初始化子组件
         self.tree_builder = TreeBuilder(config)
@@ -705,7 +706,7 @@ class QuestionTreeModeler:
     def build_question_tree(self, search_results: List[SearchRoundRecord], topic: str) -> Dict[str, Any]:
         """构建问题树状结构"""
         try:
-            workflow_logger.log_info(f"开始构建问题树状结构，主题: {topic}")
+            self.logger.log_info(f"开始构建问题树状结构，主题: {topic}")
             
             # 1. 构建基础树结构
             tree = self.tree_builder.build_tree(search_results, topic)
@@ -736,7 +737,7 @@ class QuestionTreeModeler:
                 "created_at": datetime.now().isoformat()
             }
             
-            workflow_logger.log_info(f"问题树状结构构建完成，共{optimized_tree.total_nodes}个节点")
+            self.logger.log_info(f"问题树状结构构建完成，共{optimized_tree.total_nodes}个节点")
             return result
             
         except Exception as e:
@@ -745,7 +746,7 @@ class QuestionTreeModeler:
                 "error": str(e),
                 "created_at": datetime.now().isoformat()
             }
-            workflow_logger.log_error(f"构建问题树状结构失败: {str(e)}")
+            self.logger.log_error(f"构建问题树状结构失败: {str(e)}")
             return error_result
     
     def get_tree_statistics(self, tree: QuestionTree) -> Dict[str, Any]:

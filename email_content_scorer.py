@@ -115,7 +115,7 @@ class SearchQualityScorer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
         
         # 评分权重配置
         self.weights = {
@@ -139,7 +139,7 @@ class SearchQualityScorer:
             direction_rounds = [round for round in search_rounds if round.direction == direction]
             
             if not direction_rounds:
-                workflow_logger.log_warning(f"方向 '{direction}' 没有搜索记录")
+                self.logger.log_warning(f"方向 '{direction}' 没有搜索记录")
                 return 0.0
             
             # 1. 计算搜索结果数量评分
@@ -161,7 +161,7 @@ class SearchQualityScorer:
             return min(comprehensive_score * 100, 100.0)  # 转换为0-100分
             
         except Exception as e:
-            workflow_logger.log_error(f"计算搜索质量评分失败: {str(e)}")
+            self.logger.log_error(f"计算搜索质量评分失败: {str(e)}")
             return 0.0
     
     def _calculate_results_count_score(self, search_rounds: List[SearchRoundRecord]) -> float:
@@ -216,7 +216,7 @@ class ContentDepthScorer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
         
         # 评分权重配置
         self.weights = {
@@ -240,7 +240,7 @@ class ContentDepthScorer:
             direction_rounds = [round for round in search_rounds if round.direction == direction]
             
             if not direction_rounds:
-                workflow_logger.log_warning(f"方向 '{direction}' 没有搜索记录")
+                self.logger.log_warning(f"方向 '{direction}' 没有搜索记录")
                 return 0.0
             
             # 1. 计算摘要长度评分
@@ -262,7 +262,7 @@ class ContentDepthScorer:
             return min(comprehensive_score * 100, 100.0)  # 转换为0-100分
             
         except Exception as e:
-            workflow_logger.log_error(f"计算内容深度评分失败: {str(e)}")
+            self.logger.log_error(f"计算内容深度评分失败: {str(e)}")
             return 0.0
     
     def _calculate_summary_length_score(self, search_rounds: List[SearchRoundRecord]) -> float:
@@ -324,7 +324,7 @@ class TechnicalMetricsScorer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
         
         # 评分权重配置
         self.weights = {
@@ -346,7 +346,7 @@ class TechnicalMetricsScorer:
             direction_rounds = [round for round in search_rounds if round.direction == direction]
             
             if not direction_rounds:
-                workflow_logger.log_warning(f"方向 '{direction}' 没有搜索记录")
+                self.logger.log_warning(f"方向 '{direction}' 没有搜索记录")
                 return 0.0
             
             # 1. 计算处理时间效率评分
@@ -364,7 +364,7 @@ class TechnicalMetricsScorer:
             return min(comprehensive_score * 100, 100.0)  # 转换为0-100分
             
         except Exception as e:
-            workflow_logger.log_error(f"计算技术指标评分失败: {str(e)}")
+            self.logger.log_error(f"计算技术指标评分失败: {str(e)}")
             return 0.0
     
     def _calculate_processing_time_score(self, search_rounds: List[SearchRoundRecord]) -> float:
@@ -399,7 +399,7 @@ class ComprehensiveScorer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
         
         # 评分权重配置
         self.weights = {
@@ -422,7 +422,7 @@ class ComprehensiveScorer:
             return min(comprehensive_score, 100.0)
             
         except Exception as e:
-            workflow_logger.log_error(f"计算综合评分失败: {str(e)}")
+            self.logger.log_error(f"计算综合评分失败: {str(e)}")
             return 0.0
     
     def determine_quality_level(self, comprehensive_score: float) -> QualityLevel:
@@ -440,7 +440,7 @@ class ScoreAnalyzer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
     
     def analyze_scoring_result(self, scoring_result: ScoringResult) -> Dict[str, Any]:
         """分析评分结果"""
@@ -460,7 +460,7 @@ class ScoreAnalyzer:
             return analysis_report
             
         except Exception as e:
-            workflow_logger.log_error(f"分析评分结果失败: {str(e)}")
+            self.logger.log_error(f"分析评分结果失败: {str(e)}")
             return {}
     
     def _calculate_statistics(self, scoring_result: ScoringResult):
@@ -589,7 +589,7 @@ class EmailContentScorer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        workflow_logger = workflow_logger
+        self.logger = workflow_logger
         
         # 初始化子组件
         self.search_quality_scorer = SearchQualityScorer(config)
@@ -602,7 +602,7 @@ class EmailContentScorer:
         """对各个方向进行评分"""
         try:
             start_time = datetime.now()
-            workflow_logger.log_info(f"开始对方向进行评分，主题: {topic}")
+            self.logger.log_info(f"开始对方向进行评分，主题: {topic}")
             
             # 创建评分结果
             scoring_result = ScoringResult(topic)
@@ -632,7 +632,7 @@ class EmailContentScorer:
                 "created_at": datetime.now().isoformat()
             }
             
-            workflow_logger.log_info(f"方向评分完成，共{scoring_result.scored_directions}个方向")
+            self.logger.log_info(f"方向评分完成，共{scoring_result.scored_directions}个方向")
             return result
             
         except Exception as e:
@@ -641,7 +641,7 @@ class EmailContentScorer:
                 "error": str(e),
                 "created_at": datetime.now().isoformat()
             }
-            workflow_logger.log_error(f"方向评分失败: {str(e)}")
+            self.logger.log_error(f"方向评分失败: {str(e)}")
             return error_result
     
     def _score_single_direction(self, direction: str, search_rounds: List[SearchRoundRecord]) -> Optional[DirectionScore]:
@@ -675,7 +675,7 @@ class EmailContentScorer:
             return direction_score
             
         except Exception as e:
-            workflow_logger.log_error(f"评分方向 '{direction}' 失败: {str(e)}")
+            self.logger.log_error(f"评分方向 '{direction}' 失败: {str(e)}")
             return None
     
     def _set_detailed_metrics(self, direction_score: DirectionScore, direction: str, search_rounds: List[SearchRoundRecord]):
