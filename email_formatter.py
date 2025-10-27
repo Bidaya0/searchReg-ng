@@ -5,7 +5,7 @@
 
 from typing import Dict, Any, List
 from datetime import datetime
-from storage_models import IntegratedWorkflowRecord, SearchRoundRecord
+from storage_models import IntegratedWorkflowRecord, SearchRoundRecord, RoundReport, EndlessModeResult
 
 
 class EmailFormatter:
@@ -1094,3 +1094,216 @@ class EmailFormatter:
         
         # 过滤空类别
         return {k: v for k, v in categories.items() if v}
+    
+    def format_endless_mode_report(self, endless_result: Dict[str, Any]) -> str:
+        """格式化无尽模式报告"""
+        try:
+            topic = endless_result.get("topic", "未知主题")
+            endless_mode_id = endless_result.get("endless_mode_id", "unknown")
+            execution_stats = endless_result.get("execution_stats", {})
+            
+            # 构建邮件内容
+            email_parts = [
+                f"主题：{topic}",
+                f"无尽模式探索报告",
+                f"",
+                f"=== 执行概览 ===",
+                f"总迭代次数：{execution_stats.get('total_iterations', 0)}",
+                f"完成迭代次数：{execution_stats.get('completed_iterations', 0)}",
+                f"失败迭代次数：{execution_stats.get('failed_iterations', 0)}",
+                f"成功率：{execution_stats.get('success_rate', 0) * 100:.1f}%",
+                f"平均评分：{execution_stats.get('average_score', 0.0):.1f}分",
+                f"总耗时：{execution_stats.get('total_time', 0) / 60:.1f}分钟",
+                f""
+            ]
+            
+            # 前N个完整报告
+            top_reports = endless_result.get("top_reports", [])
+            if top_reports:
+                email_parts.extend([
+                    f"=== 高质量完整报告（前{len(top_reports)}个）===",
+                    f""
+                ])
+                
+                for i, report in enumerate(top_reports, 1):
+                    email_parts.extend([
+                        f"【第{report.get('round_number', i)}轮报告】",
+                        f"评分：{report.get('scores', {}).get('comprehensive_score', 0.0):.1f}分 ({report.get('quality_level', '未知')})",
+                        f"最佳方向：{report.get('best_direction', '未知')}",
+                        f"关键发现：",
+                    ])
+                    
+                    key_findings = report.get('key_findings', [])
+                    for finding in key_findings[:5]:
+                        email_parts.append(f"  • {finding}")
+                    
+                    email_parts.append("")
+            
+            # 其余轮次摘要
+            summary_reports = endless_result.get("summary_reports", [])
+            if summary_reports:
+                email_parts.extend([
+                    f"=== 其余轮次摘要 ===",
+                    f""
+                ])
+                
+                for summary in summary_reports:
+                    if summary.get("status") == "success":
+                        email_parts.extend([
+                            f"【第{summary.get('round_number', '未知')}轮摘要】",
+                            f"{summary.get('summary', '摘要生成失败')}",
+                            f""
+                        ])
+            
+            # 总结
+            email_parts.extend([
+                f"=== 总结 ===",
+                f"本次无尽模式探索共完成{execution_stats.get('completed_iterations', 0)}轮迭代，",
+                f"发现了{len(endless_result.get('all_round_reports', []))}个有价值的探索方向，",
+                f"平均评分{execution_stats.get('average_score', 0.0):.1f}分。",
+                f"",
+                f"报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            ])
+            
+            return "\n".join(email_parts)
+            
+        except Exception as e:
+            return f"无尽模式报告格式化失败: {str(e)}"
+    
+    def format_top_round_report(self, report: Dict[str, Any]) -> str:
+        """格式化单个完整轮次报告"""
+        try:
+            round_number = report.get("round_number", 0)
+            topic = report.get("topic", "未知主题")
+            scores = report.get("scores", {})
+            best_direction = report.get("best_direction", "未知")
+            key_findings = report.get("key_findings", [])
+            
+            report_parts = [
+                f"【第{round_number}轮完整报告】",
+                f"主题：{topic}",
+                f"综合评分：{scores.get('comprehensive_score', 0.0):.1f}分",
+                f"质量等级：{report.get('quality_level', '未知')}",
+                f"最佳方向：{best_direction}",
+                f"",
+                f"=== 详细评分 ===",
+                f"搜索质量：{scores.get('search_quality_score', 0.0):.1f}分",
+                f"内容深度：{scores.get('content_depth_score', 0.0):.1f}分",
+                f"技术指标：{scores.get('technical_metrics_score', 0.0):.1f}分",
+                f"新颖性：{scores.get('novelty_score', 0.0):.1f}分",
+                f"",
+                f"=== 关键发现 ===",
+            ]
+            
+            for i, finding in enumerate(key_findings[:10], 1):
+                report_parts.append(f"{i}. {finding}")
+            
+            return "\n".join(report_parts)
+            
+        except Exception as e:
+            return f"轮次报告格式化失败: {str(e)}"
+    
+    def format_round_summary(self, summary: Dict[str, Any]) -> str:
+        """格式化轮次摘要"""
+        try:
+            round_number = summary.get("round_number", 0)
+            topic = summary.get("topic", "未知主题")
+            summary_text = summary.get("summary", "摘要生成失败")
+            key_directions = summary.get("key_directions", [])
+            core_findings = summary.get("core_findings", [])
+            important_insights = summary.get("important_insights", [])
+            
+            summary_parts = [
+                f"【第{round_number}轮摘要】",
+                f"主题：{topic}",
+                f"",
+                f"=== 摘要内容 ===",
+                f"{summary_text}",
+                f""
+            ]
+            
+            if key_directions:
+                summary_parts.extend([
+                    f"=== 关键方向 ===",
+                    f"{', '.join(key_directions)}",
+                    f""
+                ])
+            
+            if core_findings:
+                summary_parts.extend([
+                    f"=== 核心发现 ===",
+                ])
+                for finding in core_findings[:5]:
+                    summary_parts.append(f"• {finding}")
+                summary_parts.append("")
+            
+            if important_insights:
+                summary_parts.extend([
+                    f"=== 重要洞察 ===",
+                ])
+                for insight in important_insights[:3]:
+                    summary_parts.append(f"• {insight}")
+                summary_parts.append("")
+            
+            return "\n".join(summary_parts)
+            
+        except Exception as e:
+            return f"轮次摘要格式化失败: {str(e)}"
+    
+    def save_endless_mode_report(self, endless_result: Dict[str, Any], filename: str = None) -> str:
+        """保存无尽模式报告到文件"""
+        try:
+            if not filename:
+                endless_mode_id = endless_result.get("endless_mode_id", "unknown")
+                filename = f"endless_mode_report_{endless_mode_id}.txt"
+            
+            # 格式化报告
+            email_content = self.format_endless_mode_report(endless_result)
+            
+            # 保存到文件
+            filepath = self.save_email_to_file(email_content, filename)
+            
+            return filepath
+            
+        except Exception as e:
+            raise Exception(f"保存无尽模式报告失败: {str(e)}")
+    
+    def save_top_reports(self, top_reports: List[Dict[str, Any]], endless_mode_id: str) -> List[str]:
+        """保存前N个完整报告到文件"""
+        try:
+            filepaths = []
+            
+            for i, report in enumerate(top_reports, 1):
+                # 格式化报告
+                report_content = self.format_top_round_report(report)
+                
+                # 保存到文件
+                filename = f"top_report_{i}_{endless_mode_id}.txt"
+                filepath = self.save_email_to_file(report_content, filename)
+                filepaths.append(filepath)
+            
+            return filepaths
+            
+        except Exception as e:
+            raise Exception(f"保存前N个报告失败: {str(e)}")
+    
+    def save_round_summaries(self, summaries: List[Dict[str, Any]], endless_mode_id: str) -> List[str]:
+        """保存轮次摘要到文件"""
+        try:
+            filepaths = []
+            
+            for summary in summaries:
+                if summary.get("status") == "success":
+                    # 格式化摘要
+                    summary_content = self.format_round_summary(summary)
+                    
+                    # 保存到文件
+                    round_number = summary.get("round_number", 0)
+                    filename = f"round_summary_{round_number}_{endless_mode_id}.txt"
+                    filepath = self.save_email_to_file(summary_content, filename)
+                    filepaths.append(filepath)
+            
+            return filepaths
+            
+        except Exception as e:
+            raise Exception(f"保存轮次摘要失败: {str(e)}")

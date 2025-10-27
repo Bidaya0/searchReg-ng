@@ -60,5 +60,21 @@ def get_config() -> Dict[str, Any]:
                 "detailed_analysis_length": 800,
                 "enable_llm_generation": True
             }
+        },
+        # 无尽模式配置
+        "endless_mode": {
+            "enabled": False,
+            "max_iterations": 10,
+            "top_reports": 3,
+            "new_question_strategy": "best_direction_based",
+            "early_termination": {
+                "enabled": False,
+                "no_improvement_threshold": 3,
+                "min_score_improvement": 5.0
+            },
+            "error_handling": {
+                "max_consecutive_failures": 3,
+                "continue_on_partial_failure": True
+            }
         }
     }

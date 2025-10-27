@@ -132,6 +132,77 @@ class IntegratedWorkflowRecord(BaseModelWithDatetime):
     status: str = "running"
     error_message: str = ""
 
+class RoundReport(BaseModelWithDatetime):
+    """单轮报告模型"""
+    round_number: int
+    topic: str
+    iteration_id: str
+    questions: List[QuestionItem] = Field(default_factory=list)
+    search_rounds: List[SearchRoundRecord] = Field(default_factory=list)
+    scoring_result: Optional[Dict[str, Any]] = None
+    selection_result: Optional[Dict[str, Any]] = None
+    optimized_report: Optional[Dict[str, Any]] = None
+    comprehensive_score: float = 0.0
+    quality_level: str = "低"
+    best_direction: str = ""
+    key_findings: List[str] = Field(default_factory=list)
+    processing_time: float = 0.0
+    status: str = "completed"
+    error_message: str = ""
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class IterationRoundRecord(BaseModelWithDatetime):
+    """单次迭代轮次记录"""
+    iteration_number: int
+    topic: str
+    iteration_id: str
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    questions_generated: int = 0
+    searches_completed: int = 0
+    searches_failed: int = 0
+    round_report: Optional[RoundReport] = None
+    status: str = "running"
+    error_message: str = ""
+    processing_time: float = 0.0
+
+class EndlessModeState(BaseModelWithDatetime):
+    """无尽模式状态"""
+    topic: str
+    endless_mode_id: str
+    max_iterations: int
+    current_iteration: int = 0
+    completed_iterations: int = 0
+    failed_iterations: int = 0
+    iteration_records: List[IterationRoundRecord] = Field(default_factory=list)
+    all_round_reports: List[RoundReport] = Field(default_factory=list)
+    top_reports: List[RoundReport] = Field(default_factory=list)
+    summary_reports: List[Dict[str, Any]] = Field(default_factory=list)
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    status: str = "running"
+    error_message: str = ""
+    consecutive_failures: int = 0
+    last_best_direction: str = ""
+    last_scoring_result: Optional[Dict[str, Any]] = None
+
+class EndlessModeResult(BaseModelWithDatetime):
+    """无尽模式最终结果"""
+    topic: str
+    endless_mode_id: str
+    total_iterations: int
+    completed_iterations: int
+    failed_iterations: int
+    all_round_reports: List[RoundReport] = Field(default_factory=list)
+    top_reports: List[RoundReport] = Field(default_factory=list)
+    summary_reports: List[Dict[str, Any]] = Field(default_factory=list)
+    final_email_content: str = ""
+    execution_stats: Dict[str, Any] = Field(default_factory=dict)
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    status: str = "completed"
+    error_message: str = ""
+
 # LangGraph 状态模型 - 使用TypedDict而不是BaseModel
 from typing import TypedDict, Annotated
 from langgraph.graph.message import add_messages

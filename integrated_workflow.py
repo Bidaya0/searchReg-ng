@@ -15,6 +15,7 @@ import traceback
 from storage_models import QuestionState, QuestionDirection, QuestionItem, QuestionsResult
 from storage_models import SearchState, SearchResult, ChatMessage, FinalResult, ErrorLog
 from storage_models import SearchRoundRecord, IntegratedWorkflowRecord
+from storage_models import RoundReport, IterationRoundRecord, EndlessModeState, EndlessModeResult
 from email_formatter import EmailFormatter
 from email_sender import EmailSender
 from search_tools import SearchTools
@@ -32,6 +33,11 @@ from question_tree_modeler import QuestionTreeModeler
 from email_content_scorer import EmailContentScorer
 from best_direction_selector import BestDirectionSelector
 from optimized_report_generator import OptimizedReportGenerator, ReportFormatter
+
+# 导入无尽模式的新组件
+from endless_question_generator import EndlessQuestionGenerator
+from round_report_scorer import RoundReportScorer
+from round_summary_generator import RoundSummaryGenerator
 
 
 class IntegratedWorkflowState(TypedDict):
@@ -114,6 +120,11 @@ class IntegratedWorkflowController:
         self.best_direction_selector = BestDirectionSelector(config)
         self.optimized_report_generator = OptimizedReportGenerator(config)
         self.report_formatter = ReportFormatter(config)
+        
+        # 初始化无尽模式的新组件
+        self.endless_question_generator = EndlessQuestionGenerator(config)
+        self.round_report_scorer = RoundReportScorer(config)
+        self.round_summary_generator = RoundSummaryGenerator(config)
         
         # 初始化LLM（用于汇总）
         self.llm = ChatOpenAI(
@@ -1199,3 +1210,462 @@ class IntegratedWorkflowController:
             }
             workflow_logger.log_error(f"集成工作流执行失败: {str(e)}", "process_topic")
             return error_result
+    
+    def process_topic_endless(self, topic: str, max_iterations: Optional[int] = None) -> Dict[str, Any]:
+        """无尽模式的主入口"""
+        workflow_logger.log_workflow_start("EndlessMode", topic)
+        
+        try:
+            # 获取无尽模式配置
+            endless_config = self.config.get("endless_mode", {})
+            max_iterations = max_iterations or endless_config.get("max_iterations", 10)
+            top_reports = endless_config.get("top_reports", 3)
+            
+            # 生成无尽模式ID
+            endless_mode_id = f"endless_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # 初始化无尽模式状态
+            endless_state = EndlessModeState(
+                topic=topic,
+                endless_mode_id=endless_mode_id,
+                max_iterations=max_iterations,
+                start_time=datetime.now()
+            )
+            
+            workflow_logger.log_info(f"开始无尽模式: {topic}, 最大迭代次数: {max_iterations}")
+            
+            # 执行多轮迭代
+            for iteration in range(1, max_iterations + 1):
+                workflow_logger.log_info(f"开始第{iteration}轮迭代")
+                
+                try:
+                    # 执行单次迭代
+                    iteration_result = self._execute_single_iteration(
+                        endless_state, iteration, topic
+                    )
+                    
+                    if iteration_result.get("status") == "completed":
+                        # 收集轮次报告
+                        round_report = self._collect_iteration_report(iteration_result, iteration, topic, endless_mode_id)
+                        endless_state.all_round_reports.append(round_report)
+                        endless_state.completed_iterations += 1
+                        endless_state.consecutive_failures = 0
+                        
+                        # 更新状态
+                        endless_state.last_best_direction = round_report.best_direction
+                        endless_state.last_scoring_result = round_report.scoring_result
+                        
+                        workflow_logger.log_info(f"第{iteration}轮迭代完成: 评分{round_report.comprehensive_score:.1f}")
+                        
+                    else:
+                        # 迭代失败
+                        endless_state.failed_iterations += 1
+                        endless_state.consecutive_failures += 1
+                        
+                        workflow_logger.log_error(f"第{iteration}轮迭代失败: {iteration_result.get('error', '未知错误')}")
+                        
+                        # 检查是否应该提前终止
+                        max_consecutive_failures = endless_config.get("error_handling", {}).get("max_consecutive_failures", 3)
+                        if endless_state.consecutive_failures >= max_consecutive_failures:
+                            workflow_logger.log_warning(f"连续失败{endless_state.consecutive_failures}次，提前终止")
+                            break
+                    
+                except Exception as e:
+                    endless_state.failed_iterations += 1
+                    endless_state.consecutive_failures += 1
+                    workflow_logger.log_error(f"第{iteration}轮迭代异常: {str(e)}")
+                    
+                    # 检查是否应该提前终止
+                    max_consecutive_failures = endless_config.get("error_handling", {}).get("max_consecutive_failures", 3)
+                    if endless_state.consecutive_failures >= max_consecutive_failures:
+                        workflow_logger.log_warning(f"连续失败{endless_state.consecutive_failures}次，提前终止")
+                        break
+            
+            # 最终处理
+            workflow_logger.log_info("开始最终处理: 评分排序和报告生成")
+            
+            # 对所有轮次报告评分排序
+            scoring_result = self._score_all_round_reports(endless_state.all_round_reports)
+            
+            # 筛选前N个报告
+            selection_result = self._select_top_reports(scoring_result, top_reports)
+            
+            # 生成其余轮次摘要
+            summary_result = self._generate_round_summaries(selection_result["remaining_reports"])
+            
+            # 生成最终报告
+            final_result = self._generate_endless_final_report(
+                endless_state, scoring_result, selection_result, summary_result
+            )
+            
+            # 更新状态
+            endless_state.end_time = datetime.now()
+            endless_state.status = "completed"
+            endless_state.top_reports = [RoundReport(**report) for report in selection_result["top_reports"]]
+            endless_state.summary_reports = summary_result["summaries"]
+            
+            workflow_logger.log_workflow_end("EndlessMode", "completed", final_result)
+            
+            return final_result
+            
+        except Exception as e:
+            error_result = {
+                "topic": topic,
+                "endless_mode_id": endless_mode_id if 'endless_mode_id' in locals() else "unknown",
+                "status": "error",
+                "error": str(e),
+                "generated_at": datetime.now().isoformat()
+            }
+            workflow_logger.log_error(f"无尽模式执行失败: {str(e)}", "process_topic_endless")
+            return error_result
+    
+    def _execute_single_iteration(self, endless_state: EndlessModeState, iteration: int, topic: str) -> Dict[str, Any]:
+        """执行单次迭代轮次"""
+        try:
+            iteration_id = f"{endless_state.endless_mode_id}_iter_{iteration}"
+            
+            # 生成问题
+            if iteration == 1:
+                # 第一轮使用原始主题
+                questions_result = self.question_workflow.generate_questions(topic)
+            else:
+                # 后续轮次基于上一轮结果生成新问题
+                previous_report = endless_state.all_round_reports[-1] if endless_state.all_round_reports else None
+                questions_result = self.endless_question_generator.generate_next_questions(
+                    topic, previous_report, endless_state.all_round_reports
+                )
+            
+            if questions_result.get("status") != "completed" and questions_result.get("status") != "success":
+                return {
+                    "status": "error",
+                    "error": f"问题生成失败: {questions_result.get('error', '未知错误')}"
+                }
+            
+            # 提取问题数据
+            questions = []
+            question_directions = []
+            
+            if "directions" in questions_result:
+                # 来自无尽问题生成器
+                for direction_data in questions_result["directions"]:
+                    direction = QuestionDirection(
+                        direction=direction_data.direction,
+                        rationale=direction_data.rationale,
+                        questions=direction_data.questions
+                    )
+                    questions.extend(direction_data.questions)
+                    question_directions.append(direction)
+            else:
+                # 来自原始问题工作流
+                for direction_data in questions_result.get('directions', []):
+                    direction = QuestionDirection(
+                        direction=direction_data['direction'],
+                        rationale=direction_data.get('rationale', ''),
+                        questions=[]
+                    )
+                    
+                    for question_data in direction_data.get('questions', []):
+                        question = QuestionItem(question=question_data['question'])
+                        questions.append(question)
+                        direction.questions.append(question)
+                    
+                    question_directions.append(direction)
+            
+            # 执行搜索
+            search_results = []
+            search_rounds = []
+            
+            for i, question in enumerate(questions):
+                try:
+                    # 构建搜索上下文
+                    search_context = f"原问题：{topic}\n子问题：{question.question}\n\n请基于原问题和子问题生成搜索查询，确保搜索内容与原问题高度相关。"
+                    
+                    # 执行搜索
+                    search_result = self.search_workflow.process_topic(search_context)
+                    
+                    if search_result.get("status") == "completed":
+                        # 创建搜索轮次记录
+                        search_round = SearchRoundRecord(
+                            round_number=i + 1,
+                            question=question.question,
+                            direction="unknown",
+                            search_query=question.question,
+                            search_results=[],
+                            summary=search_result.get("summaries", [""])[0] if search_result.get("summaries") else "",
+                            key_points=search_result.get("key_points", []),
+                            success=True,
+                            processing_time=0.0
+                        )
+                        
+                        search_rounds.append(search_round)
+                        search_results.append(search_result)
+                    else:
+                        # 记录失败的搜索
+                        search_round = SearchRoundRecord(
+                            round_number=i + 1,
+                            question=question.question,
+                            direction="unknown",
+                            search_query=question.question,
+                            success=False,
+                            error_message=search_result.get("error", "搜索失败"),
+                            processing_time=0.0
+                        )
+                        search_rounds.append(search_round)
+                        
+                except Exception as e:
+                    workflow_logger.log_error(f"搜索问题失败: {question.question} - {str(e)}")
+                    search_round = SearchRoundRecord(
+                        round_number=i + 1,
+                        question=question.question,
+                        direction="unknown",
+                        search_query=question.question,
+                        success=False,
+                        error_message=str(e),
+                        processing_time=0.0
+                    )
+                    search_rounds.append(search_round)
+            
+            # 执行User Story 4的流程
+            # 树状建模
+            tree_result = self.question_tree_modeler.build_question_tree(search_rounds, topic)
+            
+            # 内容评分
+            scoring_result = self.email_content_scorer.score_directions(search_rounds, topic)
+            
+            # 方向筛选
+            selection_result = self.best_direction_selector.select_best_directions(scoring_result)
+            
+            # 报告优化
+            optimized_report = self.optimized_report_generator.generate_optimized_report(
+                selection_result, scoring_result, search_rounds, tree_result, topic
+            )
+            
+            return {
+                "status": "completed",
+                "iteration_id": iteration_id,
+                "questions": questions,
+                "question_directions": question_directions,
+                "search_rounds": search_rounds,
+                "tree_result": tree_result,
+                "scoring_result": scoring_result,
+                "selection_result": selection_result,
+                "optimized_report": optimized_report
+            }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": f"执行迭代异常: {str(e)}"
+            }
+    
+    def _collect_iteration_report(self, iteration_result: Dict[str, Any], iteration: int, topic: str, endless_mode_id: str) -> RoundReport:
+        """收集单轮报告"""
+        try:
+            # 提取关键信息
+            scoring_result = iteration_result.get("scoring_result", {})
+            selection_result = iteration_result.get("selection_result", {})
+            optimized_report = iteration_result.get("optimized_report", {})
+            
+            # 计算综合评分
+            comprehensive_score = 0.0
+            quality_level = "低"
+            best_direction = ""
+            key_findings = []
+            
+            if scoring_result.get("status") == "completed":
+                scoring_data = scoring_result.get("scoring_result", {})
+                comprehensive_score = scoring_data.get("average_comprehensive_score", 0.0)
+                quality_level = scoring_data.get("overall_quality_level", "低")
+            
+            if selection_result.get("status") == "completed":
+                selection_data = selection_result.get("selection_result", {})
+                best_direction = selection_data.get("best_direction", "")
+            
+            if optimized_report.get("status") == "completed":
+                optimized_data = optimized_report.get("optimized_report", {})
+                key_findings = optimized_data.get("key_insights", [])
+            
+            # 创建轮次报告
+            round_report = RoundReport(
+                round_number=iteration,
+                topic=topic,
+                iteration_id=iteration_result.get("iteration_id", f"{endless_mode_id}_iter_{iteration}"),
+                questions=iteration_result.get("questions", []),
+                search_rounds=iteration_result.get("search_rounds", []),
+                scoring_result=scoring_result,
+                selection_result=selection_result,
+                optimized_report=optimized_report,
+                comprehensive_score=comprehensive_score,
+                quality_level=quality_level,
+                best_direction=best_direction,
+                key_findings=key_findings,
+                processing_time=0.0,  # 这里可以计算实际处理时间
+                status="completed"
+            )
+            
+            return round_report
+            
+        except Exception as e:
+            workflow_logger.log_error(f"收集轮次报告异常: {str(e)}")
+            # 返回一个基本的报告
+            return RoundReport(
+                round_number=iteration,
+                topic=topic,
+                iteration_id=f"{endless_mode_id}_iter_{iteration}",
+                status="error",
+                error_message=str(e)
+            )
+    
+    def _score_all_round_reports(self, round_reports: List[RoundReport]) -> Dict[str, Any]:
+        """对所有轮次报告评分"""
+        return self.round_report_scorer.score_all_round_reports(round_reports)
+    
+    def _select_top_reports(self, scoring_result: Dict[str, Any], top_count: int) -> Dict[str, Any]:
+        """筛选前N个报告"""
+        sorted_reports = scoring_result.get("sorted_reports", [])
+        return self.round_report_scorer.select_top_reports(sorted_reports, top_count)
+    
+    def _generate_round_summaries(self, remaining_reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """生成其余轮次摘要"""
+        # 将字典转换为RoundReport对象
+        round_reports = []
+        for report_data in remaining_reports:
+            try:
+                round_report = RoundReport(**report_data)
+                round_reports.append(round_report)
+            except Exception as e:
+                workflow_logger.log_error(f"转换报告数据异常: {str(e)}")
+                continue
+        
+        return self.round_summary_generator.generate_all_round_summaries(round_reports)
+    
+    def _generate_endless_final_report(self, 
+                                     endless_state: EndlessModeState,
+                                     scoring_result: Dict[str, Any],
+                                     selection_result: Dict[str, Any],
+                                     summary_result: Dict[str, Any]) -> Dict[str, Any]:
+        """生成无尽模式最终报告"""
+        try:
+            # 计算执行统计
+            total_time = (datetime.now() - endless_state.start_time).total_seconds()
+            
+            execution_stats = {
+                "total_time": total_time,
+                "total_iterations": endless_state.max_iterations,
+                "completed_iterations": endless_state.completed_iterations,
+                "failed_iterations": endless_state.failed_iterations,
+                "success_rate": endless_state.completed_iterations / endless_state.max_iterations if endless_state.max_iterations > 0 else 0,
+                "average_score": scoring_result.get("statistics", {}).get("average_score", 0.0),
+                "top_reports_count": len(selection_result.get("top_reports", [])),
+                "summary_reports_count": len(summary_result.get("summaries", []))
+            }
+            
+            # 生成最终邮件内容
+            final_email_content = self._format_endless_mode_email(
+                endless_state, scoring_result, selection_result, summary_result
+            )
+            
+            # 构建最终结果
+            final_result = {
+                "topic": endless_state.topic,
+                "endless_mode_id": endless_state.endless_mode_id,
+                "total_iterations": endless_state.max_iterations,
+                "completed_iterations": endless_state.completed_iterations,
+                "failed_iterations": endless_state.failed_iterations,
+                "all_round_reports": [report.dict() for report in endless_state.all_round_reports],
+                "top_reports": selection_result.get("top_reports", []),
+                "summary_reports": summary_result.get("summaries", []),
+                "final_email_content": final_email_content,
+                "execution_stats": execution_stats,
+                "start_time": endless_state.start_time.isoformat(),
+                "end_time": datetime.now().isoformat(),
+                "status": "completed"
+            }
+            
+            # 保存结果
+            self.storage.save(final_result, "results", f"endless_mode_report_{endless_state.endless_mode_id}")
+            
+            return final_result
+            
+        except Exception as e:
+            workflow_logger.log_error(f"生成无尽模式最终报告异常: {str(e)}")
+            return {
+                "topic": endless_state.topic,
+                "endless_mode_id": endless_state.endless_mode_id,
+                "status": "error",
+                "error": str(e),
+                "generated_at": datetime.now().isoformat()
+            }
+    
+    def _format_endless_mode_email(self, 
+                                 endless_state: EndlessModeState,
+                                 scoring_result: Dict[str, Any],
+                                 selection_result: Dict[str, Any],
+                                 summary_result: Dict[str, Any]) -> str:
+        """格式化无尽模式邮件内容"""
+        try:
+            email_parts = [
+                f"主题：{endless_state.topic}",
+                f"无尽模式探索报告",
+                f"",
+                f"=== 执行概览 ===",
+                f"总迭代次数：{endless_state.max_iterations}",
+                f"完成迭代次数：{endless_state.completed_iterations}",
+                f"失败迭代次数：{endless_state.failed_iterations}",
+                f"成功率：{endless_state.completed_iterations / endless_state.max_iterations * 100:.1f}%",
+                f"平均评分：{scoring_result.get('statistics', {}).get('average_score', 0.0):.1f}分",
+                f""
+            ]
+            
+            # 前N个完整报告
+            top_reports = selection_result.get("top_reports", [])
+            if top_reports:
+                email_parts.extend([
+                    f"=== 高质量完整报告（前{len(top_reports)}个）===",
+                    f""
+                ])
+                
+                for i, report in enumerate(top_reports, 1):
+                    email_parts.extend([
+                        f"【第{report['round_number']}轮报告】",
+                        f"评分：{report['scores']['comprehensive_score']:.1f}分 ({report['quality_level']})",
+                        f"最佳方向：{report['best_direction']}",
+                        f"关键发现：",
+                    ])
+                    
+                    for finding in report.get('key_findings', [])[:5]:
+                        email_parts.append(f"  • {finding}")
+                    
+                    email_parts.append("")
+            
+            # 其余轮次摘要
+            summaries = summary_result.get("summaries", [])
+            if summaries:
+                email_parts.extend([
+                    f"=== 其余轮次摘要 ===",
+                    f""
+                ])
+                
+                for summary in summaries:
+                    if summary.get("status") == "success":
+                        email_parts.extend([
+                            f"【第{summary['round_number']}轮摘要】",
+                            f"{summary['summary']}",
+                            f""
+                        ])
+            
+            # 总结
+            email_parts.extend([
+                f"=== 总结 ===",
+                f"本次无尽模式探索共完成{endless_state.completed_iterations}轮迭代，",
+                f"发现了{len(endless_state.all_round_reports)}个有价值的探索方向，",
+                f"平均评分{scoring_result.get('statistics', {}).get('average_score', 0.0):.1f}分。",
+                f"",
+                f"报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            ])
+            
+            return "\n".join(email_parts)
+            
+        except Exception as e:
+            workflow_logger.log_error(f"格式化无尽模式邮件异常: {str(e)}")
+            return f"无尽模式探索报告生成失败: {str(e)}"

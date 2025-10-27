@@ -14,6 +14,9 @@ def main():
     parser.add_argument("--interactive", action="store_true", help="交互式模式，从标准输入获取主题")
     parser.add_argument("--questions", action="store_true", help="启用问题生成模式：基于5个方向生成25个问题")
     parser.add_argument("--integrated", action="store_true", help="启用集成工作流模式：问题生成+搜索+汇总")
+    parser.add_argument("--endless", action="store_true", help="启用无尽模式：多轮迭代探索")
+    parser.add_argument("--max-iterations", type=int, default=10, help="无尽模式最大循环次数(默认10)")
+    parser.add_argument("--top-reports", type=int, default=3, help="无尽模式完整发送的报告数量(默认3)")
     args = parser.parse_args()
     
     try:
@@ -68,9 +71,61 @@ def main():
         print(f"错误：获取主题失败 - {str(e)}")
         sys.exit(1)
     
-    # 分支：问题生成模式 or 搜索模式 or 集成工作流模式
+    # 分支：问题生成模式 or 搜索模式 or 集成工作流模式 or 无尽模式
     try:
-        if args.integrated:
+        if args.endless:
+            print(f"正在为主题 '{topic}' 执行无尽模式探索...")
+            workflow_logger.log_info("启动无尽模式")
+            
+            # 更新配置中的无尽模式参数
+            config["endless_mode"]["max_iterations"] = args.max_iterations
+            config["endless_mode"]["top_reports"] = args.top_reports
+            
+            result = integrated_system.process_topic_endless(topic, args.max_iterations)
+            
+            if result.get("status") == "completed":
+                print(f"\n=== 无尽模式探索结果 ===")
+                print(f"主题：{result['topic']}")
+                print(f"无尽模式ID：{result['endless_mode_id']}")
+                print(f"总迭代次数：{result['total_iterations']}")
+                print(f"完成迭代次数：{result['completed_iterations']}")
+                print(f"失败迭代次数：{result['failed_iterations']}")
+                
+                # 显示执行统计
+                if result.get('execution_stats'):
+                    stats = result['execution_stats']
+                    print(f"\n=== 执行统计 ===")
+                    print(f"总处理时间：{stats.get('total_time', 0) / 60:.1f}分钟")
+                    print(f"成功率：{stats.get('success_rate', 0) * 100:.1f}%")
+                    print(f"平均评分：{stats.get('average_score', 0.0):.1f}分")
+                    print(f"高质量报告：{stats.get('top_reports_count', 0)}个")
+                    print(f"摘要报告：{stats.get('summary_reports_count', 0)}个")
+                
+                # 显示前N个报告概览
+                top_reports = result.get('top_reports', [])
+                if top_reports:
+                    print(f"\n=== 高质量完整报告（前{len(top_reports)}个）===")
+                    for i, report in enumerate(top_reports, 1):
+                        print(f"{i}. 第{report.get('round_number', i)}轮 - 评分{report.get('scores', {}).get('comprehensive_score', 0.0):.1f}分 - {report.get('best_direction', '未知方向')}")
+                
+                # 显示摘要报告概览
+                summary_reports = result.get('summary_reports', [])
+                if summary_reports:
+                    print(f"\n=== 其余轮次摘要（{len(summary_reports)}个）===")
+                    for summary in summary_reports[:5]:  # 只显示前5个
+                        if summary.get("status") == "success":
+                            print(f"第{summary.get('round_number', '未知')}轮：{summary.get('summary', '摘要生成失败')[:100]}...")
+                
+                # 显示邮件内容预览
+                if result.get('final_email_content'):
+                    print(f"\n=== 邮件内容预览 ===")
+                    email_preview = result['final_email_content'][:500]
+                    print(f"{email_preview}...")
+                    print(f"\n完整邮件内容已生成并保存")
+            else:
+                print(f"无尽模式探索失败：{result.get('error', '未知错误')}")
+                workflow_logger.log_error(f"无尽模式探索失败: {result.get('error', '未知错误')}")
+        elif args.integrated:
             print(f"正在为主题 '{topic}' 执行集成工作流...")
             workflow_logger.log_info("启动集成工作流模式")
             result = integrated_system.process_topic(topic)
